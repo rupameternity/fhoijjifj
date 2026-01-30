@@ -1,19 +1,16 @@
 import os
 import threading
 from flask import Flask
+from pyrogram import Client, filters, idle
+from pytgcalls import PyTgCalls
+from pytgcalls.types import MediaStream
 
-# --- THE FINAL PATCH (Fixes the crash) ---
+# --- FAKE ERROR PATCH (Isse mat hatana) ---
 import pyrogram.errors
-class FakeError(Exception):
-    pass
-# Assign FakeError to both spellings so it never crashes
+class FakeError(Exception): pass
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# -----------------------------------------
-
-from pyrogram import Client, filters
-from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream  # Back to v3 syntax
+# ------------------------------------------
 
 # --- CONFIG ---
 API_ID = int(os.environ.get("API_ID"))
@@ -37,7 +34,6 @@ async def start_guard(client, message):
     if message.chat.id not in ALLOWED_GROUPS and message.from_user.id not in AUTHORIZED_USERS: return
     try:
         msg = await message.reply("🛡️ **Anchoring VC...**")
-        
         await call_py.play(
             message.chat.id, 
             MediaStream("http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv")
@@ -56,7 +52,14 @@ async def stop_guard(client, message):
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
+# --- STARTUP FIX (Ye error theek karega) ---
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
+    
+    # Pehle Client start karenge, fir PyTgCalls, fir Idle
+    # Isse "Already Connected" wala error nahi aayega
+    user_bot.start()
     call_py.start()
-    user_bot.run()
+    print("--- BOT STARTED ---")
+    idle()
+    user_bot.stop()
