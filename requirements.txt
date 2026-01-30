@@ -1,5 +1,5 @@
 pyrogram
 tgcrypto
-py-tgcalls==3.0.0.dev24
 flask
 aiohttp
+git+https://github.com/pytgcalls/pytgcalls.git@3.0.0.dev24
