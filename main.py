@@ -3,7 +3,7 @@ import threading
 from flask import Flask
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped
+from pytgcalls.types import MediaStream # Naya Import v4 ke liye
 
 # --- CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID"))
@@ -22,7 +22,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is Alive!"
+    return "Bot is Running (Latest Engine)!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -56,13 +56,16 @@ async def join_vc(client, message):
 
     chat_id = message.chat.id
     try:
-        await message.reply("🛡️ Shield Activating...")
-        # Old Version Syntax (Stable)
-        await call_py.join_group_call(
+        await message.reply("🛡️ Shield Activating (Auto-Version)...")
+        
+        # Latest Syntax: play() use karte hain ab
+        await call_py.play(
             chat_id, 
-            AudioPiped("http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv")
+            MediaStream(
+                "http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv"
+            )
         )
-        await message.reply("✅ **Shield Active!**\nStable Core v0.9.6 Connected.")
+        await message.reply("✅ **Shield Active!**\nLatest Engine Connected.")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
@@ -73,7 +76,7 @@ async def leave_vc(client, message):
 
     chat_id = message.chat.id
     try:
-        await call_py.leave_group_call(chat_id)
+        await call_py.leave_call(chat_id)
         await message.reply("👋 Shield Deactivated.")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
