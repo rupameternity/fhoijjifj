@@ -2,13 +2,23 @@ import os
 import threading
 import asyncio
 from flask import Flask
+import pyrogram.errors
+
+# --- MAGIC PATCH (Ye Error 100% Fix Karega) ---
+# Hum zabardasti purani spelling ko nayi wali se jod rahe hain
+try:
+    pyrogram.errors.GroupcallForbidden = pyrogram.errors.GroupCallForbidden
+except:
+    pass
+# -----------------------------------------------
+
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 
 # --- CONFIG ---
 API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
+API_HASH = os.environ.get("API_HASH"))
 SESSION = os.environ.get("SESSION_STRING")
 
 ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
@@ -16,10 +26,10 @@ AUTHORIZED_USERS = [int(x.strip()) for x in os.environ.get("AUTHORIZED_USERS", "
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Glitch Guard Running"
+def home(): return "Glitch Guard Active"
 def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-# --- BOT ---
+# --- BOT SETUP ---
 user_bot = Client("glitch_guard", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
