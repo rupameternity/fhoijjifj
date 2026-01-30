@@ -3,14 +3,13 @@ import threading
 from flask import Flask
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream # Naya Import v4 ke liye
+from pytgcalls.types import AudioPiped
 
 # --- CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 SESSION = os.environ.get("SESSION_STRING")
 
-# Groups aur Admins
 allowed_groups_env = os.environ.get("ALLOWED_GROUPS", "")
 ALLOWED_GROUPS = [int(x.strip()) for x in allowed_groups_env.split(",") if x.strip()]
 
@@ -22,11 +21,11 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is Running (Latest Engine)!"
+    return "Bot is Running (Stable v2.2.10)!"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    # Errors chupane ke liye use_reloader=False
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False)
 
 # --- BOT SETUP ---
 user_bot = Client(
@@ -40,43 +39,34 @@ call_py = PyTgCalls(user_bot)
 
 # --- PERMISSIONS ---
 async def is_authorized(message):
-    if message.chat.id not in ALLOWED_GROUPS:
-        return False
-    if message.from_user and message.from_user.id in AUTHORIZED_USERS:
-        return True
-    if message.sender_chat and message.sender_chat.id == message.chat.id:
-        return True
+    if message.chat.id not in ALLOWED_GROUPS: return False
+    if message.from_user and message.from_user.id in AUTHORIZED_USERS: return True
+    if message.sender_chat and message.sender_chat.id == message.chat.id: return True
     return False
 
 # --- COMMANDS ---
 @user_bot.on_message(filters.command(["ten_join", "join"], prefixes=["/", "!"]) & filters.group)
 async def join_vc(client, message):
-    if not await is_authorized(message):
-        return
+    if not await is_authorized(message): return
 
-    chat_id = message.chat.id
     try:
-        await message.reply("🛡️ Shield Activating (Auto-Version)...")
+        await message.reply("🛡️ Shield Activating (Stable Core)...")
         
-        # Latest Syntax: play() use karte hain ab
-        await call_py.play(
-            chat_id, 
-            MediaStream(
-                "http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv"
-            )
+        # Stable Syntax: join_group_call (No MediaStream object needed)
+        await call_py.join_group_call(
+            message.chat.id, 
+            AudioPiped("http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv")
         )
-        await message.reply("✅ **Shield Active!**\nLatest Engine Connected.")
+        await message.reply("✅ **Shield Active!**\nStable Version 2.2.10 Connected.")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
 @user_bot.on_message(filters.command(["ten_leave", "leave"], prefixes=["/", "!"]) & filters.group)
 async def leave_vc(client, message):
-    if not await is_authorized(message):
-        return
-
-    chat_id = message.chat.id
+    if not await is_authorized(message): return
+    
     try:
-        await call_py.leave_call(chat_id)
+        await call_py.leave_group_call(message.chat.id)
         await message.reply("👋 Shield Deactivated.")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
