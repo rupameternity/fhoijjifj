@@ -1,5 +1,5 @@
 pyrogram
 tgcrypto
-https://github.com/Team-Yukki/py-tgcalls/archive/master.zip
+git+https://github.com/pytgcalls/pytgcalls.git
 flask
 aiohttp
