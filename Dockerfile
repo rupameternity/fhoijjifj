@@ -1,19 +1,8 @@
-FROM python:3.9-slim-bullseye
+# 'slim' hata diya hai, ab full version use kar rahe hain
+FROM python:3.9-bullseye
 
-# Asli Fix: Maine 'python3-dev', 'libopus-dev', 'libsodium-dev' add kiya hai.
-# Inke bina 'git' wala installation fail ho jata hai.
-RUN apt-get update && apt-get install -y \
-    curl \
-    gnupg \
-    lsb-release \
-    ffmpeg \
-    git \
-    build-essential \
-    python3-dev \
-    libopus-dev \
-    libffi-dev \
-    libsodium-dev \
-    && apt-get clean
+# Sirf FFmpeg chahiye (Audio ke liye zaroori hai)
+RUN apt-get update && apt-get install -y ffmpeg && apt-get clean
 
 WORKDIR /app
 COPY . .
