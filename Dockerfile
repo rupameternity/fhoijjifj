@@ -1,21 +1,16 @@
 FROM python:3.9-slim-bullseye
 
-# 1. Install Dependencies (Build Essential add kiya hai compilation ke liye)
-RUN apt-get update && apt-get install -y curl gnupg lsb-release ffmpeg git build-essential && \
-    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list && \
-    apt-get update && \
-    apt-get install -y cloudflare-warp
-
-# 2. Work Directory
 WORKDIR /app
+
+# System Update & FFmpeg (Audio ke liye zaroori hai)
+RUN apt-get update && apt-get install -y ffmpeg git && apt-get clean
+
 COPY . .
 
-# 3. Requirements Install
+# Requirements Install
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Permissions
+# Start Script Permission
 RUN chmod +x start.sh
 
-# 5. Start
 CMD ["./start.sh"]
