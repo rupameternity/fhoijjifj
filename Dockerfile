@@ -1,6 +1,5 @@
 FROM python:3.10-bullseye
 
-# Network aur Audio drivers install kar rahe hain
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
@@ -13,9 +12,6 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY . .
-
-# Cache clear karke fresh install
 RUN pip install --no-cache-dir -U -r requirements.txt
 RUN chmod +x start.sh
-
 CMD ["./start.sh"]
