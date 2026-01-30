@@ -1,21 +1,19 @@
 import os
 import threading
 from flask import Flask
-import pyrogram.errors
 
-# --- ULTIMATE PATCH (Fake ID) ---
-# Hum khud ka ek error bana rahe hain taaki library shant rahe.
-# Isse Attribute Error aur Import Error dono khatam ho jayenge.
+# --- THE FINAL PATCH (Fixes the crash) ---
+import pyrogram.errors
 class FakeError(Exception):
     pass
-
-setattr(pyrogram.errors, "GroupcallForbidden", FakeError)
-setattr(pyrogram.errors, "GroupCallForbidden", FakeError)
-# -----------------------------------------------
+# Assign FakeError to both spellings so it never crashes
+pyrogram.errors.GroupCallForbidden = FakeError
+pyrogram.errors.GroupcallForbidden = FakeError
+# -----------------------------------------
 
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
-from pytgcalls.types import InputAudioStream
+from pytgcalls.types import MediaStream  # Back to v3 syntax
 
 # --- CONFIG ---
 API_ID = int(os.environ.get("API_ID"))
@@ -27,7 +25,7 @@ AUTHORIZED_USERS = [int(x.strip()) for x in os.environ.get("AUTHORIZED_USERS", "
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Glitch Guard Active (Patched)"
+def home(): return "Glitch Guard Active"
 def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 # --- BOT SETUP ---
@@ -38,17 +36,14 @@ call_py = PyTgCalls(user_bot)
 async def start_guard(client, message):
     if message.chat.id not in ALLOWED_GROUPS and message.from_user.id not in AUTHORIZED_USERS: return
     try:
-        msg = await message.reply("🛡️ **Anchoring VC via Render Server...**")
+        msg = await message.reply("🛡️ **Anchoring VC...**")
         
-        # Hum V2 Syntax use kar rahe hain kyunki logs mein V2 ke signs the
-        await call_py.join_group_call(
+        await call_py.play(
             message.chat.id, 
-            InputAudioStream(
-                "http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv",
-            )
+            MediaStream("http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv")
         )
-        
-        await msg.edit("✅ **Secured.** I am holding the connection strong.")
+        await call_py.mute_stream(message.chat.id)
+        await msg.edit("✅ **Secured.**")
     except Exception as e:
         await msg.edit(f"❌ Error: {e}")
 
@@ -56,7 +51,7 @@ async def start_guard(client, message):
 async def stop_guard(client, message):
     if message.from_user.id not in AUTHORIZED_USERS: return
     try:
-        await call_py.leave_group_call(message.chat.id)
+        await call_py.leave_call(message.chat.id)
         await message.reply("👋 Guard Removed.")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
