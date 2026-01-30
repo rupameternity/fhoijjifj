@@ -1,7 +1,7 @@
 FROM python:3.9-slim-bullseye
 
-# 1. Install Dependencies (Git add kar diya hai yahan)
-RUN apt-get update && apt-get install -y curl gnupg lsb-release ffmpeg git && \
+# 1. Install Dependencies (Build Essential add kiya hai compilation ke liye)
+RUN apt-get update && apt-get install -y curl gnupg lsb-release ffmpeg git build-essential && \
     curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list && \
     apt-get update && \
