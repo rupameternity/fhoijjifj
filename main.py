@@ -45,7 +45,7 @@ async def start_guard(client, message):
         # NOTE: Maine mute hata diya hai kyunki wo crash kar raha tha.
         # Tu please khud VC mein Bot ko Mute kar dena.
         
-        await msg.edit("✅ **VC Stabilized.**\nRender ka internet ab VC hold kar raha hai. Glitch nahi hoga.")
+        await msg.edit("✅ **VC Stabilized.")
     except Exception as e:
         await msg.edit(f"❌ Error: {e}")
 
@@ -67,3 +67,4 @@ if __name__ == "__main__":
     print("--- GLITCH FIXER STARTED ---")
     idle()
     user_bot.stop()
+
