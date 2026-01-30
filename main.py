@@ -18,7 +18,7 @@ from pytgcalls.types import MediaStream
 
 # --- CONFIG ---
 API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH"))
+API_HASH = os.environ.get("API_HASH")
 SESSION = os.environ.get("SESSION_STRING")
 
 ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
@@ -62,3 +62,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
     call_py.start()
     user_bot.run()
+
