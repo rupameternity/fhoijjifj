@@ -1,20 +1,17 @@
 import os
 import threading
-import asyncio
 from flask import Flask
 import pyrogram.errors
 
-# --- MAGIC PATCH (Ye Error 100% Fix Karega) ---
-# Hum zabardasti purani spelling ko nayi wali se jod rahe hain
-try:
-    pyrogram.errors.GroupcallForbidden = pyrogram.errors.GroupCallForbidden
-except:
-    pass
+# --- 1. MAGIC PATCH (Ye Error 100% Fix Karega) ---
+# Library purani hai aur spelling galat dhoond rahi hai.
+# Hum zabardasti usse sahi spelling pakda rahe hain.
+setattr(pyrogram.errors, "GroupcallForbidden", pyrogram.errors.GroupCallForbidden)
 # -----------------------------------------------
 
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream
+from pytgcalls.types import InputAudioStream
 
 # --- CONFIG ---
 API_ID = int(os.environ.get("API_ID"))
@@ -26,7 +23,7 @@ AUTHORIZED_USERS = [int(x.strip()) for x in os.environ.get("AUTHORIZED_USERS", "
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Glitch Guard Active"
+def home(): return "Glitch Guard Active (V2)"
 def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 # --- BOT SETUP ---
@@ -39,12 +36,18 @@ async def start_guard(client, message):
     try:
         msg = await message.reply("🛡️ **Anchoring VC via Render Server...**")
         
-        # Live Stream Header trick for Priority Packets
-        await call_py.play(
+        # --- V2 SYNTAX (Jo installed library pe chalega) ---
+        await call_py.join_group_call(
             message.chat.id, 
-            MediaStream("http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv")
+            InputAudioStream(
+                "http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv",
+            )
         )
-        await call_py.mute_stream(message.chat.id)
+        
+        # Note: V2 mein mute ka function alag hota hai, 
+        # isliye safety ke liye hum bas join kara rahe hain.
+        # Tu khud 'Mute for everyone' kar dena.
+        
         await msg.edit("✅ **Secured.** I am holding the connection strong.")
     except Exception as e:
         await msg.edit(f"❌ Error: {e}")
@@ -53,7 +56,7 @@ async def start_guard(client, message):
 async def stop_guard(client, message):
     if message.from_user.id not in AUTHORIZED_USERS: return
     try:
-        await call_py.leave_call(message.chat.id)
+        await call_py.leave_group_call(message.chat.id)
         await message.reply("👋 Guard Removed.")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
@@ -62,4 +65,3 @@ if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
     call_py.start()
     user_bot.run()
-
