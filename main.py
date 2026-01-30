@@ -1,29 +1,28 @@
 import os
-import asyncio
+import threading
 from flask import Flask
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream  # Naya Import
-import threading
+from pytgcalls.types import AudioPiped
 
 # --- CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 SESSION = os.environ.get("SESSION_STRING")
 
-# Groups aur Admins lists
+# Groups aur Admins
 allowed_groups_env = os.environ.get("ALLOWED_GROUPS", "")
 ALLOWED_GROUPS = [int(x.strip()) for x in allowed_groups_env.split(",") if x.strip()]
 
 authorized_users_env = os.environ.get("AUTHORIZED_USERS", "")
 AUTHORIZED_USERS = [int(x.strip()) for x in authorized_users_env.split(",") if x.strip()]
 
-# --- FLASK KEEP-ALIVE ---
+# --- FLASK SERVER ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is Running Successfully!"
+    return "Bot is Alive!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -39,7 +38,7 @@ user_bot = Client(
 
 call_py = PyTgCalls(user_bot)
 
-# --- PERMISSION CHECK ---
+# --- PERMISSIONS ---
 async def is_authorized(message):
     if message.chat.id not in ALLOWED_GROUPS:
         return False
@@ -49,7 +48,7 @@ async def is_authorized(message):
         return True
     return False
 
-# --- COMMANDS (Updated for v4) ---
+# --- COMMANDS ---
 @user_bot.on_message(filters.command(["ten_join", "join"], prefixes=["/", "!"]) & filters.group)
 async def join_vc(client, message):
     if not await is_authorized(message):
@@ -57,16 +56,13 @@ async def join_vc(client, message):
 
     chat_id = message.chat.id
     try:
-        await message.reply("🛡️ Joining VC (Latest v4 Engine)...")
-        
-        # Latest Syntax: play() use karte hain ab
-        await call_py.play(
+        await message.reply("🛡️ Shield Activating...")
+        # Old Version Syntax (Stable)
+        await call_py.join_group_call(
             chat_id, 
-            MediaStream(
-                "http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv"
-            )
+            AudioPiped("http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv")
         )
-        await message.reply("✅ **Shield Activated!**\nBot is Live.")
+        await message.reply("✅ **Shield Active!**\nStable Core v0.9.6 Connected.")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
@@ -77,8 +73,8 @@ async def leave_vc(client, message):
 
     chat_id = message.chat.id
     try:
-        await call_py.leave_call(chat_id)
-        await message.reply("👋 Leaving VC.")
+        await call_py.leave_group_call(chat_id)
+        await message.reply("👋 Shield Deactivated.")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
