@@ -1,70 +1,120 @@
 import os
-import threading
 import asyncio
-from flask import Flask
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
+from aiohttp import web
 
-# --- FAKE ERROR PATCH (Isse mat hatana, ye zaroori hai) ---
-import pyrogram.errors
-class FakeError(Exception): pass
-pyrogram.errors.GroupCallForbidden = FakeError
-pyrogram.errors.GroupcallForbidden = FakeError
-# -----------------------------------------------------------
+# ================= SECURE CONFIGURATION ================= #
 
-# --- CONFIG ---
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
-SESSION = os.environ.get("SESSION_STRING")
+# Ye values ab Environment Variables se aayengi
+API_ID = int(os.getenv("API_ID", "0"))
+API_HASH = os.getenv("API_HASH", "")
+SESSION_STRING = os.getenv("SESSION_STRING", "")
 
-ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
-AUTHORIZED_USERS = [int(x.strip()) for x in os.environ.get("AUTHORIZED_USERS", "").split(",") if x.strip()]
+# Lists ko comma se tod kar integer banayenge
+# Example Env Var: -100123456,-100987654
+ALLOWED_GROUPS = [int(x) for x in os.getenv("ALLOWED_GROUPS", "").split(",") if x.strip()]
 
-app = Flask(__name__)
-@app.route('/')
-def home(): return "Anti-Glitch Bot Running"
-def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+# Example Env Var: 12345678,87654321
+SUDO_USERS = [int(x) for x in os.getenv("SUDO_USERS", "").split(",") if x.strip()]
 
-# --- BOT SETUP ---
-user_bot = Client("glitch_shield", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
-call_py = PyTgCalls(user_bot)
+# ================= BOT SETUP ================= #
 
-@user_bot.on_message(filters.command(["guard"], prefixes=["/", "!"]) & filters.group)
-async def start_guard(client, message):
-    if message.chat.id not in ALLOWED_GROUPS and message.from_user.id not in AUTHORIZED_USERS: return
+app = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+call_py = PyTgCalls(app)
+
+# ================= LOGIC ================= #
+
+# 1. Auto-Leave Logic (Security)
+@app.on_message(filters.group)
+async def security_check(client, message):
+    chat_id = message.chat.id
+    
+    # Agar ALLOWED_GROUPS list khali hai ya group match nahi hota
+    if chat_id not in ALLOWED_GROUPS:
+        try:
+            # Leave silently or with message
+            await message.reply("❌ Unauthorized Group. Leaving...")
+            await client.leave_chat(chat_id)
+        except:
+            pass
+        return
+
+    message.continue_propagation()
+
+
+# 2. /go Command (Stream Photo)
+@app.on_message(filters.command("go") & filters.group)
+async def start_stream(client, message):
+    if message.from_user.id not in SUDO_USERS:
+        return 
+
+    if not message.reply_to_message or not message.reply_to_message.photo:
+        await message.reply("❗ Photo pe reply karke /go likho.")
+        return
+
     try:
-        msg = await message.reply("🛡️ **Stabilizing VC...**")
-        
-        # Connection Strong karne ke liye hum video stream bhej rahe hain
+        status = await message.reply("🔄 Processing...")
+        file_path = await message.reply_to_message.download()
+
         await call_py.play(
-            message.chat.id, 
-            MediaStream("http://docs.evostream.com/sample_content/assets/sintel1min720p.mkv")
+            message.chat.id,
+            MediaStream(
+                file_path,
+                video_flags=MediaStream.Flags.IGNORE_AUDIO
+            )
         )
-        
-        # NOTE: Maine mute hata diya hai kyunki wo crash kar raha tha.
-        # Tu please khud VC mein Bot ko Mute kar dena.
-        
-        await msg.edit("✅ **VC Stabilized.")
-    except Exception as e:
-        await msg.edit(f"❌ Error: {e}")
 
-@user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
-async def stop_guard(client, message):
-    if message.from_user.id not in AUTHORIZED_USERS: return
-    try:
-        await call_py.leave_call(message.chat.id)
-        await message.reply("👋 Bot Left.")
+        await status.delete()
+        await message.reply("Poster attached")
+        # os.remove(file_path) # Optional: Delete local file
+
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-if __name__ == "__main__":
-    threading.Thread(target=run_flask).start()
-    
-    # Ye startup sequence crash hone se bachata hai
-    user_bot.start()
-    call_py.start()
-    print("--- GLITCH FIXER STARTED ---")
-    idle()
-    user_bot.stop()
 
+# 3. /leave Command (Stop Stream)
+@app.on_message(filters.command("leave") & filters.group)
+async def stop_stream(client, message):
+    if message.from_user.id not in SUDO_USERS:
+        return
+
+    try:
+        await call_py.leave_call(message.chat.id)
+        await message.reply("Poster out")
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
+
+
+# ================= RENDER KEEP-ALIVE SERVER ================= #
+
+async def web_server():
+    async def handle(request):
+        return web.Response(text="Secure Poster Bot Running!")
+
+    app_web = web.Application()
+    app_web.router.add_get('/', handle)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+# ================= MAIN EXECUTION ================= #
+
+async def main():
+    if not API_ID or not SESSION_STRING:
+        print("❌ Error: Environment Variables set nahi hain!")
+        return
+
+    print("Starting Services...")
+    await web_server()
+    await app.start()
+    await call_py.start()
+    print("Bot Started Successfully!")
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
