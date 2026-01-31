@@ -1,5 +1,4 @@
 pyrogram
-tgcrypto
-git+https://github.com/pytgcalls/pytgcalls.git
-flask
+py-tgcalls
 aiohttp
+TgCrypto
