@@ -3,13 +3,13 @@ import threading
 import asyncio
 from flask import Flask
 
-# --- PATCH FOR PYROGRAM ERROR ---
+# --- PATCH (Ye rehne dena) ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# -------------------------------
+# -----------------------------
 
 from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
@@ -20,16 +20,14 @@ API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION = os.environ.get("SESSION_STRING", "")
 
-# IDs load karte waqt error handling
 try:
     ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
     SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
-except Exception as e:
-    print(f"❌ Config Error: IDs sahi format mein nahi hain! {e}")
+except:
     ALLOWED_GROUPS = []
     SUDO_USERS = []
 
-# --- FLASK SERVER ---
+# --- FLASK ---
 app = Flask(__name__)
 @app.route('/')
 def home(): return "Bot is Alive"
@@ -40,48 +38,42 @@ def run_flask():
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
-# --- DEBUG: Print every message to Logs ---
 @user_bot.on_message(filters.group, group=-1)
 async def logger(client, message):
-    # Ye sirf Render logs mein dikhega taaki pata chale bot message padh raha hai
-    print(f"📩 Msg received in {message.chat.id} from {message.from_user.id}: {message.text}")
+    print(f"📩 Msg: {message.text}")
 
 # --- COMMANDS ---
 
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
-    print(f"➡️ Command /go detected from {message.from_user.id}")
-    
-    # 1. Check Permissions
-    if message.from_user.id not in SUDO_USERS:
-        print("⛔ User not in SUDO_USERS")
-        return
-    
+    if message.from_user.id not in SUDO_USERS: return
     if message.chat.id not in ALLOWED_GROUPS:
-        print("⛔ Group not in ALLOWED_GROUPS")
-        await message.reply("❌ Unauthorized Group ID. Check Logs.")
+        await message.reply("❌ Group Not Allowed")
         return
 
-    # 2. Check Reply
     if not message.reply_to_message or not message.reply_to_message.photo:
         await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("🔄 **Connecting to VC...**")
+    status = await message.reply("🔄 **Processing...**")
 
     try:
         file_path = await message.reply_to_message.download()
-        print(f"✅ Photo downloaded: {file_path}")
-
+        
+        # --- FIX IS HERE ---
+        # Flag hata diya, simple stream call
         await call_py.play(
             message.chat.id, 
-            MediaStream(
-                file_path,
-                video_flags=MediaStream.Flags.IGNORE_AUDIO
-            )
+            MediaStream(file_path) 
         )
+        
+        # Audio mute kar denge taaki shor na aaye
+        try:
+            await call_py.mute_stream(message.chat.id)
+        except:
+            pass
+            
         await status.edit("✅ **Poster Streaming!**")
-        print("✅ Stream Started")
 
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -96,22 +88,13 @@ async def stop_stream(client, message):
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-# --- MAIN EXECUTION (FIXED ASYNC LOOP) ---
+# --- MAIN ---
 async def main():
-    print("🚀 Starting Bot Services...")
-    
-    # Start Clients
+    print("🚀 Bot Starting...")
     await user_bot.start()
-    print("✅ Pyrogram Client Started")
-    
     await call_py.start()
-    print("✅ PyTgCalls Started")
-    
-    # Keep running
     await idle()
-    
-    # Stop cleanly
-    await call_py.stop() # type: ignore
+    await call_py.stop()
     await user_bot.stop()
 
 if __name__ == "__main__":
