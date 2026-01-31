@@ -1,7 +1,7 @@
-# Python ka patla version use karenge storage bachane ke liye
-FROM python:3.10-slim-buster
+# Buster hata ke 'slim-bookworm' use kar rahe hain (Latest Stable Debian)
+FROM python:3.10-slim-bookworm
 
-# System updates aur FFmpeg install karna (Ye step bohot zaroori hai VC ke liye)
+# System updates aur FFmpeg install karna
 RUN apt-get update && apt-get install -y ffmpeg git && rm -rf /var/lib/apt/lists/*
 
 # Working Directory set karna
