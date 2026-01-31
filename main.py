@@ -3,13 +3,13 @@ import threading
 import asyncio
 from flask import Flask
 
-# --- PATCH (Ye rehne dena) ---
+# --- PATCH (Rehne do) ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# -----------------------------
+# ------------------------
 
 from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
@@ -34,13 +34,28 @@ def home(): return "Bot is Alive"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
+# --- HELPER: Image to Video Converter ---
+async def convert_to_video(input_path, output_path):
+    # FFmpeg command:
+    # -loop 1: Image ko repeat karo
+    # -t 3600: 1 ghante tak (infinite feel)
+    # -pix_fmt yuv420p: Ye line sabse IMPORTANT hai (Telegram compatibility)
+    # -vf scale: Size ko even number banata hai taaki crash na ho
+    
+    process = await asyncio.create_subprocess_shell(
+        f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{input_path}" -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -vf "scale=1280:-2" -r 5 -t 3600 -y "{output_path}"',
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    await process.communicate()
+
 # --- BOT SETUP ---
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
 @user_bot.on_message(filters.group, group=-1)
 async def logger(client, message):
-    print(f"📩 Msg: {message.text}")
+    pass # Logs clean rakhne ke liye hata diya
 
 # --- COMMANDS ---
 
@@ -55,25 +70,33 @@ async def start_stream(client, message):
         await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("🔄 **Processing...**")
+    status = await message.reply("🔄 **Generating Video Stream...**")
 
     try:
+        # 1. Download Photo
         file_path = await message.reply_to_message.download()
-        
-        # --- FIX IS HERE ---
-        # Flag hata diya, simple stream call
+        video_file = f"{file_path}.mp4"
+
+        # 2. Convert to Video (Ye black screen fix karega)
+        await convert_to_video(file_path, video_file)
+
+        # 3. Stream the Video
         await call_py.play(
             message.chat.id, 
-            MediaStream(file_path) 
+            MediaStream(video_file) 
         )
         
-        # Audio mute kar denge taaki shor na aaye
+        # 4. Audio Mute
         try:
             await call_py.mute_stream(message.chat.id)
         except:
             pass
             
         await status.edit("✅ **Poster Streaming!**")
+        
+        # Cleanup: Original photo delete kar do, video rehne do stream ke liye
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
     except Exception as e:
         print(f"❌ Error: {e}")
