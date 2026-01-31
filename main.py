@@ -3,111 +3,118 @@ import threading
 import asyncio
 from flask import Flask
 
-# --- THE PATCH (Jo error fix karega) ---
-# Ye code sabse upar hona zaroori hai
+# --- PATCH FOR PYROGRAM ERROR ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
-
-# Dono spelling assign kar rahe hain taaki crash na ho
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# ---------------------------------------
+# -------------------------------
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 
-# --- CONFIGURATION (Render Env Vars se) ---
+# --- CONFIG ---
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION = os.environ.get("SESSION_STRING", "")
 
-# Env vars ko list mein convert karna
-ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
-SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
+# IDs load karte waqt error handling
+try:
+    ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
+    SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
+except Exception as e:
+    print(f"❌ Config Error: IDs sahi format mein nahi hain! {e}")
+    ALLOWED_GROUPS = []
+    SUDO_USERS = []
 
-# --- FLASK SERVER (Render ko zinda rakhne ke liye) ---
+# --- FLASK SERVER ---
 app = Flask(__name__)
-
 @app.route('/')
-def home():
-    return "Poster Bot is Running with Patch!"
-
+def home(): return "Bot is Alive"
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 # --- BOT SETUP ---
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
-# --- LOGIC SECTIONS ---
+# --- DEBUG: Print every message to Logs ---
+@user_bot.on_message(filters.group, group=-1)
+async def logger(client, message):
+    # Ye sirf Render logs mein dikhega taaki pata chale bot message padh raha hai
+    print(f"📩 Msg received in {message.chat.id} from {message.from_user.id}: {message.text}")
 
-# 1. Security Check (Auto Leave)
-@user_bot.on_message(filters.group)
-async def security_check(client, message):
-    # Agar allowed group nahi hai, toh check karo
-    if message.chat.id not in ALLOWED_GROUPS:
-        try:
-            # Leave message
-            await message.reply("❌ Unauthorized Group. Leaving...")
-            await client.leave_chat(message.chat.id)
-        except:
-            pass
-        return
-    message.continue_propagation()
+# --- COMMANDS ---
 
-# 2. /go Command
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
+    print(f"➡️ Command /go detected from {message.from_user.id}")
+    
+    # 1. Check Permissions
     if message.from_user.id not in SUDO_USERS:
+        print("⛔ User not in SUDO_USERS")
+        return
+    
+    if message.chat.id not in ALLOWED_GROUPS:
+        print("⛔ Group not in ALLOWED_GROUPS")
+        await message.reply("❌ Unauthorized Group ID. Check Logs.")
         return
 
+    # 2. Check Reply
     if not message.reply_to_message or not message.reply_to_message.photo:
-        await message.reply("❗ Photo pe reply karke /go likho.")
+        await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("🛡️ **Processing Image...**")
+    status = await message.reply("🔄 **Connecting to VC...**")
 
     try:
-        # Photo download karo
         file_path = await message.reply_to_message.download()
+        print(f"✅ Photo downloaded: {file_path}")
 
-        # Stream start karo
         await call_py.play(
             message.chat.id, 
             MediaStream(
                 file_path,
-                video_flags=MediaStream.Flags.IGNORE_AUDIO # Sirf video/image dikhana hai
+                video_flags=MediaStream.Flags.IGNORE_AUDIO
             )
         )
-        
-        await status.edit("✅ **Poster Attached.**")
-        
-        # Optional: File delete mat karna abhi, stream ke liye chahiye hoti hai
-        
+        await status.edit("✅ **Poster Streaming!**")
+        print("✅ Stream Started")
+
     except Exception as e:
+        print(f"❌ Error: {e}")
         await status.edit(f"❌ Error: {e}")
 
-# 3. /leave Command
 @user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
-    if message.from_user.id not in SUDO_USERS:
-        return
-
+    if message.from_user.id not in SUDO_USERS: return
     try:
         await call_py.leave_call(message.chat.id)
         await message.reply("👋 **Poster Out.**")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-# --- EXECUTION ---
-if __name__ == "__main__":
-    # Flask ko alag thread mein chalayenge
-    threading.Thread(target=run_flask).start()
+# --- MAIN EXECUTION (FIXED ASYNC LOOP) ---
+async def main():
+    print("🚀 Starting Bot Services...")
     
-    # Bot ko start karenge
-    print("Bot Starting...")
-    call_py.start()
-    user_bot.run()
+    # Start Clients
+    await user_bot.start()
+    print("✅ Pyrogram Client Started")
+    
+    await call_py.start()
+    print("✅ PyTgCalls Started")
+    
+    # Keep running
+    await idle()
+    
+    # Stop cleanly
+    await call_py.stop() # type: ignore
+    await user_bot.stop()
+
+if __name__ == "__main__":
+    threading.Thread(target=run_flask).start()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
