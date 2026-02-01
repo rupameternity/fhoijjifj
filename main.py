@@ -1,118 +1,123 @@
 import os
+import threading
 import asyncio
+import shutil
+from flask import Flask
+
+# --- THE PATCH (Error Fix) ---
+import pyrogram.errors
+class FakeError(Exception):
+    pass
+pyrogram.errors.GroupCallForbidden = FakeError
+pyrogram.errors.GroupcallForbidden = FakeError
+# ---------------------------------------
+
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 
-# --- Configuration from Render Environment Variables ---
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
-SESSION_STRING = os.environ.get("SESSION_STRING")
+# --- CONFIGURATION ---
+API_ID = int(os.environ.get("API_ID", "0"))
+API_HASH = os.environ.get("API_HASH", "")
+SESSION = os.environ.get("SESSION_STRING", "")
+ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
+SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
 
-# Admin aur Groups ko comma se split karke list banayenge
-ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()]
-ALLOWED_GROUPS = [int(x) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
+app = Flask(__name__)
 
-# --- Client Setup ---
-app = Client(
-    "render_userbot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING
-)
-call_py = PyTgCalls(app)
+@app.route('/')
+def home():
+    return "Poster Bot is Ultra Stable Now!"
 
-# --- Helper Function to Clean Cache ---
-def clean_cache():
-    if os.path.exists("input.jpg"):
-        os.remove("input.jpg")
-    if os.path.exists("stream.mp4"):
-        os.remove("stream.mp4")
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
 
-# --- /go Command Handler ---
-@app.on_message(filters.command("go") & filters.group)
-async def start_stream(client, message):
-    # Security Check: Only Admin & Allowed Groups
-    if message.from_user.id not in ADMIN_IDS:
-        return
+# --- BOT SETUP ---
+user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
+call_py = PyTgCalls(user_bot)
+
+# Temporary storage for file paths to clean up later
+active_files = {}
+
+# 1. Security Check
+@user_bot.on_message(filters.group)
+async def security_check(client, message):
     if message.chat.id not in ALLOWED_GROUPS:
+        try:
+            await message.reply("❌ Unauthorized Group. Leaving...")
+            await client.leave_chat(message.chat.id)
+        except:
+            pass
+        return
+    message.continue_propagation()
+
+# 2. /go Command (Ultra Clean)
+@user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
+async def start_stream(client, message):
+    if message.from_user.id not in SUDO_USERS:
         return
 
-    # Check if replied to a photo
     if not message.reply_to_message or not message.reply_to_message.photo:
-        await message.reply_text("❌ Bhai kisi photo pe reply karke /go likh.")
+        await message.reply("❗ Photo pe reply karke /go likho.")
         return
 
-    status_msg = await message.reply_text("🔄 Processing... Photo download kar raha hun.")
-
-    # Purana kachra saaf karo
-    clean_cache()
+    chat_id = message.chat.id
+    status = await message.reply("🛡️ **Starting Fresh Stream...**")
 
     try:
-        # 1. Download Photo
-        await message.reply_to_message.download("input.jpg")
-        await status_msg.edit("🎬 Video generate kar raha hun (FFMPEG)...")
+        # Purana session agar koi ho toh clear karo
+        try:
+            await call_py.leave_call(chat_id)
+        except:
+            pass
 
-        # 2. Convert Image to Video using FFMPEG (Lightweight Loop)
-        # -loop 1: Image loop karega
-        # -t 3600: 1 ghante ki stream banayega (file size control ke liye)
-        # -pix_fmt yuv420p: Telegram support ke liye zaroori hai
-        # -r 10: Sirf 10 FPS (Static image hai, high FPS ki zaroorat nahi, RAM bachega)
-        ffmpeg_cmd = (
-            "ffmpeg -loop 1 -i input.jpg -f lavfi -i anullsrc "
-            "-c:v libx264 -tune stillimage -c:a aac -b:a 12k "
-            "-pix_fmt yuv420p -r 10 -shortest -t 3600 stream.mp4 -y"
-        )
-        
-        process = await asyncio.create_subprocess_shell(ffmpeg_cmd)
-        await process.communicate()
+        # Photo download karo unique name ke sath
+        file_path = await message.reply_to_message.download(file_name=f"stream_{chat_id}.jpg")
+        active_files[chat_id] = file_path
 
-        # 3. Join VC and Stream
-        if not os.path.exists("stream.mp4"):
-            await status_msg.edit("❌ Error: Video file create nahi hui.")
-            return
-
-        await status_msg.edit("▶️ Streaming starting on VC...")
-        
+        # Stream start (High Quality Settings)
         await call_py.play(
-            message.chat.id,
+            chat_id, 
             MediaStream(
-                "stream.mp4",
+                file_path,
+                video_flags=MediaStream.Flags.IGNORE_AUDIO
             )
         )
-        await status_msg.edit("✅ **Streaming Started!**")
-
+        
+        await status.edit("✅ **Poster Attached Successfully.**")
+        
     except Exception as e:
-        await status_msg.edit(f"❌ Error: {e}")
-        clean_cache()
+        await status.edit(f"❌ Error: {e}")
 
-# --- /leave Command Handler ---
-@app.on_message(filters.command("leave") & filters.group)
+# 3. /leave Command (Full Reset)
+@user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
-    # Security Check
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    if message.chat.id not in ALLOWED_GROUPS:
+    if message.from_user.id not in SUDO_USERS:
         return
 
+    chat_id = message.chat.id
     try:
-        await call_py.leave_call(message.chat.id)
-        await message.reply_text("👋 Left VC.")
+        # VC Leave karo
+        await call_py.leave_call(chat_id)
+        
+        # Memory/File Clean karo
+        if chat_id in active_files:
+            file_to_del = active_files[chat_id]
+            if os.path.exists(file_to_del):
+                os.remove(file_to_del)
+            del active_files[chat_id]
+
+        await message.reply("👋 **Session Cleared & Poster Removed.**")
     except Exception as e:
-        await message.reply_text(f"⚠️ VC mein nahi tha shayad: {e}")
-
-    # RAM/Disk Cleanup: Delete files immediately
-    clean_cache()
-    await message.reply_text("🗑️ Cache cleared. RAM free kar diya.")
-
-# --- Start Bot ---
-async def start_bot():
-    print("Userbot Starting...")
-    await app.start()
-    await call_py.start()
-    print("Userbot is Active!")
-    # Keep running
-    await asyncio.Event().wait()
+        await message.reply(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(start_bot())
+    # Downloader folder clean up on start
+    if os.path.exists("downloads"):
+        shutil.rmtree("downloads")
+    
+    threading.Thread(target=run_flask).start()
+    print("Bot Starting...")
+    call_py.start()
+    user_bot.run()
