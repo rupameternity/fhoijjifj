@@ -1,148 +1,120 @@
 import os
+import sys  # Restart karne ke liye ye zaroori hai
 import threading
 import asyncio
 from flask import Flask
 
-# --- 1. CRASH FIX PATCH ---
+# --- THE PATCH (Jo error fix karega) ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
+
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# --------------------------
+# ---------------------------------------
 
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 
-# --- 2. CONFIG ---
+# --- CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION = os.environ.get("SESSION_STRING", "")
 
-try:
-    ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
-    SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
-except:
-    ALLOWED_GROUPS = []
-    SUDO_USERS = []
+ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
+SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
 
-# --- 3. FLASK SERVER ---
+# --- FLASK SERVER ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is Running!"
+    return "Poster Bot is Running!"
 
 def run_flask():
-    # use_reloader=False port conflict rokta hai
     port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, use_reloader=False) 
+    app.run(host="0.0.0.0", port=port)
 
-# --- 4. BOT SETUP ---
+# --- BOT SETUP ---
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
-# --- 5. HELPER: Fast Video Converter ---
-# Ye zaroori hai taaki 'Black Screen' na aaye aur 'Processing' pe na atke
-async def convert_to_video_fast(input_path, output_path):
-    cmd = (
-        f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{input_path}" '
-        f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
-        f'-vf "scale=1280:-2" -r 1 -t 3600 -y "{output_path}"'
-    )
-    process = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    await process.communicate()
+# --- LOGIC SECTIONS ---
 
-# --- 6. LOGIC ---
+# 1. Security Check (Auto Leave)
+@user_bot.on_message(filters.group)
+async def security_check(client, message):
+    if message.chat.id not in ALLOWED_GROUPS:
+        try:
+            await message.reply("❌ Unauthorized Group. Leaving...")
+            await client.leave_chat(message.chat.id)
+        except:
+            pass
+        return
+    message.continue_propagation()
 
+# --- NEW: RESET COMMAND (Agar bot atak jaye to ye use karna) ---
+@user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
+async def restart_bot(client, message):
+    if message.from_user.id not in SUDO_USERS:
+        return
+    
+    await message.reply("🔄 **Bot Restart ho raha hai...** (Wait 5 sec)")
+    # Ye command bot ko band karke wapas chalu kar degi
+    os.execl(sys.executable, sys.executable, *sys.argv)
+
+
+# 2. /go Command
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
-    if message.from_user.id not in SUDO_USERS: return
-    if message.chat.id not in ALLOWED_GROUPS:
-        await message.reply("❌ Group Not Allowed")
+    if message.from_user.id not in SUDO_USERS:
         return
 
     if not message.reply_to_message or not message.reply_to_message.photo:
-        await message.reply("❗ Photo pe reply karo.")
+        await message.reply("❗ Photo pe reply karke /go likho.")
         return
 
-    status = await message.reply("⚡ **Processing...**")
+    status = await message.reply("🛡️ **Processing Image...**")
 
     try:
-        # Purana call leave karo
-        try:
-            await call_py.leave_call(message.chat.id)
-            await asyncio.sleep(1)
-        except:
-            pass
-
-        # 1. Download
+        # Photo download karo
         file_path = await message.reply_to_message.download()
-        video_file = f"video_{message.chat.id}.mp4"
-        
-        # 2. Convert (Fast Mode - 1 FPS)
-        # Ye bohot jaldi ho jayega, atke ga nahi
-        await convert_to_video_fast(file_path, video_file)
 
-        # 3. Stream (ERROR FIX IS HERE)
-        # Maine flags hata diye hain. Simple file path pass kar rahe hain.
+        # Stream start karo
+        # NOTE: Maine yahan se 'IGNORE_AUDIO' hata diya kyunki wo crash kar raha tha.
+        # Ab ye direct join karega.
         await call_py.play(
-            message.chat.id,
-            MediaStream(video_file)
+            message.chat.id, 
+            MediaStream(file_path)
         )
         
-        # Audio ko alag se mute kar denge
+        # Audio mute kar dete hain taaki shor na aaye
         try:
             await call_py.mute_stream(message.chat.id)
         except:
             pass
         
-        await status.edit("✅ **Poster Streaming!**")
+        await status.edit("✅ **Poster Attached.**")
         
-        # Cleanup Image only (Video rehne do stream ke liye)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
     except Exception as e:
-        print(f"Error: {e}")
         await status.edit(f"❌ Error: {e}")
 
-
+# 3. /leave Command
 @user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
-    if message.from_user.id not in SUDO_USERS: return
+    if message.from_user.id not in SUDO_USERS:
+        return
+
     try:
         await call_py.leave_call(message.chat.id)
         await message.reply("👋 **Poster Out.**")
-        
-        # Cleanup Video
-        video_file = f"video_{message.chat.id}.mp4"
-        if os.path.exists(video_file):
-            os.remove(video_file)
-
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-
-# --- 7. MAIN EXECUTION ---
-async def main():
-    print("🚀 Starting Bot...")
-    await user_bot.start()
-    await call_py.start()
-    print("✅ Ready!")
-    await idle()
-    await call_py.stop()
-    await user_bot.stop()
-
+# --- EXECUTION ---
 if __name__ == "__main__":
-    t = threading.Thread(target=run_flask)
-    t.daemon = True
-    t.start()
-    
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    threading.Thread(target=run_flask).start()
+    print("Bot Starting...")
+    call_py.start()
+    user_bot.run()
