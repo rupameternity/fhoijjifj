@@ -1,4 +1,4 @@
 pyrogram
 py-tgcalls
-aiohttp
+flask
 TgCrypto
