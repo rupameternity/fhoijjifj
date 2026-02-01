@@ -1,4 +1,5 @@
-pyrogram
-py-tgcalls
-flask
-TgCrypto
+telethon
+pytgcalls
+tgcrypto
+pillow
+python-dotenv
