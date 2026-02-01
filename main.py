@@ -1,16 +1,16 @@
 import os
-import sys
+import threading
 import asyncio
 import signal
-from aiohttp import web
+from flask import Flask
 
-# --- PATCH (Crash Fix) ---
+# --- PYROGRAM PATCH (Crash Fix) ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# -------------------------
+# ----------------------------------
 
 from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
@@ -28,54 +28,26 @@ except:
     ALLOWED_GROUPS = []
     SUDO_USERS = []
 
+# --- FLASK SERVER ---
+app = Flask(__name__)
+@app.route('/')
+def home(): return "Bot is Alive & Streaming!"
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+# --- GLOBAL VARIABLES ---
+# FFmpeg process ko save karne ke liye taaki baad mein kill kar sakein
+ffmpeg_processes = {}
+
 # --- BOT SETUP ---
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
-# --- WEB SERVER (AIOHTTP - No Port Conflict) ---
-async def web_server():
-    async def handle(request):
-        return web.Response(text="Bot is Running Smoothly!")
-
-    app = web.Application()
-    app.router.add_get('/', handle)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    # Render ka PORT environment variable uthana zaroori hai
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    
-    try:
-        await site.start()
-        print(f"✅ Web Server started on port {port}")
-    except OSError:
-        print(f"⚠️ Port {port} busy, skipping web server (Bot will still work)")
-
-# --- HELPER: Fast Video Converter ---
-async def convert_to_video_fast(input_path, output_path):
-    # Ultra Fast Settings: 1 FPS
-    cmd = (
-        f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{input_path}" '
-        f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
-        f'-vf "scale=1280:-2" -r 1 -t 1800 -y "{output_path}"'
-    )
-    
-    process = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    await process.communicate()
+@user_bot.on_message(filters.group, group=-1)
+async def logger(client, message):
+    pass 
 
 # --- COMMANDS ---
-
-@user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
-async def restart_bot(client, message):
-    if message.from_user.id not in SUDO_USERS: return
-    await message.reply("🔄 **Rebooting System...**")
-    os.execl(sys.executable, sys.executable, *sys.argv)
 
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
@@ -88,68 +60,101 @@ async def start_stream(client, message):
         await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("⚡ **Processing...**")
+    status = await message.reply("🔄 **Setting up Live Stream...**")
 
     try:
-        try:
-            await call_py.leave_call(message.chat.id)
-        except:
-            pass
-
+        # 1. Purana stream cleanup karo agar hai toh
+        if message.chat.id in ffmpeg_processes:
+            try:
+                ffmpeg_processes[message.chat.id].kill()
+            except:
+                pass
+        
+        # 2. Setup File Paths
         file_path = await message.reply_to_message.download()
-        video_file = f"video_{message.chat.id}.mp4"
+        pipe_path = f"stream_{message.chat.id}.raw"
 
-        await convert_to_video_fast(file_path, video_file)
+        # 3. Create Named Pipe (Agar pehle se nahi hai)
+        if os.path.exists(pipe_path):
+            os.remove(pipe_path)
+        os.mkfifo(pipe_path)
 
-        await call_py.play(
-            message.chat.id, 
-            MediaStream(video_file) 
+        # 4. Start FFmpeg in BACKGROUND (Non-blocking)
+        # -re: Read at native speed (Important for live stream)
+        # -loop 1: Infinite loop input
+        # -f mpegts: Pipe format
+        print(f"Starting FFmpeg for {message.chat.id}")
+        
+        process = await asyncio.create_subprocess_shell(
+            f'ffmpeg -re -loop 1 -i "{file_path}" -pix_fmt yuv420p -s 1280x720 -r 10 -b:v 500k -f mpegts "{pipe_path}"',
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            preexec_fn=os.setsid # Process group create karta hai easy kill ke liye
         )
         
+        # Process ID save karo taaki /leave pe band kar sakein
+        ffmpeg_processes[message.chat.id] = process
+
+        # 5. Play the Pipe immediately
+        await call_py.play(
+            message.chat.id, 
+            MediaStream(pipe_path) 
+        )
+        
+        # Mute audio
         try:
             await call_py.mute_stream(message.chat.id)
         except:
             pass
-            
-        await status.edit("✅ **Streaming Started!**")
+
+        await status.edit("✅ **Live Poster Attached!**")
         
+        # Original photo ki ab zaroorat nahi, pipe ban gaya
         if os.path.exists(file_path):
             os.remove(file_path)
 
     except Exception as e:
+        print(f"❌ Error: {e}")
         await status.edit(f"❌ Error: {e}")
+
 
 @user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
     if message.from_user.id not in SUDO_USERS: return
+    
     try:
+        # 1. Leave Call
         await call_py.leave_call(message.chat.id)
         await message.reply("👋 **Poster Out.**")
-        
-        video_file = f"video_{message.chat.id}.mp4"
-        if os.path.exists(video_file):
-            os.remove(video_file)
-            
     except Exception as e:
-        await message.reply(f"❌ Error: {e}")
+        await message.reply(f"⚠️ **Force Stopped:** {e}")
 
-# --- MAIN EXECUTION ---
+    # 2. Kill FFmpeg Process (Important: CPU save karne ke liye)
+    if message.chat.id in ffmpeg_processes:
+        try:
+            # Poore process group ko kill karo
+            os.killpg(os.getpgid(ffmpeg_processes[message.chat.id].pid), signal.SIGTERM)
+        except:
+            pass
+        del ffmpeg_processes[message.chat.id]
+
+    # 3. Pipe file delete karo
+    pipe_path = f"stream_{message.chat.id}.raw"
+    if os.path.exists(pipe_path):
+        os.remove(pipe_path)
+
+
+# --- MAIN ---
 async def main():
-    print("🚀 Initializing...")
-    
-    # Web Server ko loop ke andar start karte hain (No Threading conflict)
-    await web_server()
-    
+    print("🚀 Bot Starting...")
     await user_bot.start()
     await call_py.start()
-    print("✅ Bot is Online")
-    
+    print("✅ System Online")
     await idle()
-    
     await call_py.stop()
     await user_bot.stop()
 
 if __name__ == "__main__":
-    # Yahan threading hata di hai, direct loop use hoga
+    threading.Thread(target=run_flask).start()
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
