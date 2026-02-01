@@ -1,170 +1,144 @@
 import os
-import sys
-import threading
 import asyncio
-import signal
-from flask import Flask
-from pyrogram import Client, filters, idle
+import tempfile
+import shutil
+import subprocess
+
+from telethon import TelegramClient, events
 from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream
+from pytgcalls.types.input_stream import InputStream
+from pytgcalls.types.input_stream.quality import HighQualityVideo
+from PIL import Image
 
-# --- 1. CRASH FIX PATCH ---
-import pyrogram.errors
-class FakeError(Exception):
-    pass
-pyrogram.errors.GroupCallForbidden = FakeError
-pyrogram.errors.GroupcallForbidden = FakeError
-# --------------------------
+# ================== ENV ==================
 
-# --- 2. CONFIG ---
-API_ID = int(os.environ.get("API_ID", "0"))
-API_HASH = os.environ.get("API_HASH", "")
-SESSION = os.environ.get("SESSION_STRING", "")
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+SESSION_STRING = os.getenv("SESSION_STRING")
 
-ALLOWED_GROUPS = []
-SUDO_USERS = []
-try:
-    if os.environ.get("ALLOWED_GROUPS"):
-        ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS").split(",") if x.strip()]
-    if os.environ.get("SUDO_USERS"):
-        SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS").split(",") if x.strip()]
-except:
-    pass
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS").split(",")))
+ALLOWED_GROUPS = list(map(int, os.getenv("ALLOWED_GROUPS").split(",")))
 
-# --- 3. FLASK SERVER ---
-app = Flask(__name__)
-@app.route('/')
-def home(): return "Bot is Ready"
-def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False)
+# ================= CLIENT =================
 
-# --- 4. BOT SETUP ---
-user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
-call_py = PyTgCalls(user_bot)
+client = TelegramClient(
+    session=SESSION_STRING,
+    api_id=API_ID,
+    api_hash=API_HASH
+)
 
-# --- 5. SYSTEM CLEANER (Ye hai Jadu) ---
-# Ye function har baar purana kachra saaf karega
-async def nuclear_cleanup(chat_id):
-    print(f"⚠️ Performing Nuclear Cleanup for {chat_id}...")
-    
-    # 1. Force Kill FFmpeg (System level pe process maarega)
-    try:
-        os.system("pkill -9 ffmpeg")
-    except:
-        pass
+vc = PyTgCalls(client)
 
-    # 2. Leave Call forcefully
-    try:
-        await call_py.leave_call(chat_id)
-        await asyncio.sleep(1.5) # Thoda time do Telegram ko update hone ke liye
-    except:
-        pass
-    
-    # 3. Delete ALL .mp4 files in directory (Disk space clear)
-    try:
-        for file in os.listdir():
-            if file.endswith(".mp4"):
-                os.remove(file)
-    except:
-        pass
+STREAM_PROCESS = None
+TEMP_DIR = None
 
-# --- 6. FAST CONVERTER (360p = No Lag) ---
-async def convert_to_video_fast(input_path, output_path):
-    # scale=640:-2 (360p) taaki Render Free Tier pe load na aaye
-    # -t 3600 (1 Ghanta chalega)
-    cmd = (
-        f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{input_path}" '
-        f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
-        f'-vf "scale=640:-2" -r 1 -t 3600 -y "{output_path}"'
-    )
-    
-    process = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    
-    # Timeout increased to 90s just in case, but usually takes 3s
-    try:
-        await asyncio.wait_for(process.communicate(), timeout=90.0)
-    except asyncio.TimeoutError:
+# ================= CLEANUP =================
+
+def clean_all():
+    global STREAM_PROCESS, TEMP_DIR
+
+    if STREAM_PROCESS:
         try:
-            process.kill()
+            STREAM_PROCESS.kill()
         except:
             pass
-        # Agar timeout ho jaye, to script restart kar do (Last Resort)
-        os.execl(sys.executable, sys.executable, *sys.argv)
+        STREAM_PROCESS = None
 
-# --- 7. LOGIC ---
+    if TEMP_DIR and os.path.exists(TEMP_DIR):
+        shutil.rmtree(TEMP_DIR)
 
-@user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
-async def start_stream(client, message):
-    if message.from_user.id not in SUDO_USERS: return
+    TEMP_DIR = None
 
-    if not message.reply_to_message or not message.reply_to_message.photo:
-        await message.reply("❗ Photo pe reply karo.")
+# ================= /GO =================
+
+@client.on(events.NewMessage(pattern=r"^/go$"))
+async def start_stream(event):
+    global STREAM_PROCESS, TEMP_DIR
+
+    if event.sender_id not in ADMIN_IDS:
         return
 
-    # User ko batao hum safai kar rahe hain
-    status = await message.reply("🧹 **Cleaning & Restarting Stream...**")
-    chat_id = message.chat.id
-    
-    try:
-        # --- STEP 1: SAB KUCH DELETE/KILL KARO ---
-        await nuclear_cleanup(chat_id)
+    if event.chat_id not in ALLOWED_GROUPS:
+        return
 
-        # --- STEP 2: FRESH START ---
-        file_path = await message.reply_to_message.download()
-        video_file = f"video_{chat_id}.mp4"
+    if not event.is_group:
+        return
 
-        # Convert
-        await convert_to_video_fast(file_path, video_file)
+    if not event.reply_to_msg_id:
+        await event.reply("❌ Reply to an image.")
+        return
 
-        # Stream
-        await call_py.play(
-            chat_id, 
-            MediaStream(video_file)
+    reply = await event.get_reply_message()
+
+    if not reply.photo:
+        await event.reply("❌ Only image supported.")
+        return
+
+    clean_all()
+
+    TEMP_DIR = tempfile.mkdtemp()
+    img_path = os.path.join(TEMP_DIR, "image.jpg")
+
+    await reply.download_media(img_path)
+
+    Image.open(img_path).convert("RGB").save(img_path)
+
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-re",
+        "-loop", "1",
+        "-i", img_path,
+        "-f", "lavfi",
+        "-i", "anullsrc",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-shortest",
+        "-"
+    ]
+
+    STREAM_PROCESS = subprocess.Popen(
+        ffmpeg_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL
+    )
+
+    await vc.join_group_call(
+        event.chat_id,
+        InputStream(
+            STREAM_PROCESS.stdout,
+            HighQualityVideo()
         )
-        
-        try:
-            await call_py.mute_stream(chat_id)
-        except:
-            pass
+    )
 
-        await status.edit("✅ **Live (Fresh Session)!**")
-        
-        # Image delete
-        if os.path.exists(file_path):
-            os.remove(file_path)
+    await event.reply("🟢 Image streaming started (unlimited).")
 
-    except Exception as e:
-        await status.edit(f"❌ Error: {e}")
-        # Error aane pe bhi safai
-        await nuclear_cleanup(chat_id)
+# ================= /LEAVE =================
 
-@user_bot.on_message(filters.command(["leave", "stop"], prefixes=["/", "!"]) & filters.group)
-async def stop_stream(client, message):
-    if message.from_user.id not in SUDO_USERS: return
+@client.on(events.NewMessage(pattern=r"^/leave$"))
+async def stop_stream(event):
+    if event.sender_id not in ADMIN_IDS:
+        return
+
+    if event.chat_id not in ALLOWED_GROUPS:
+        return
+
     try:
-        await nuclear_cleanup(message.chat.id)
-        await message.reply("👋 **Session Cleared.**")
-    except Exception as e:
-        await message.reply(f"❌ Error: {e}")
+        await vc.leave_group_call(event.chat_id)
+    except:
+        pass
 
-# --- 8. STARTUP ---
+    clean_all()
+    await event.reply("🔴 VC left & memory cleaned.")
+
+# ================= START =================
+
 async def main():
-    print("🚀 Bot Starting...")
-    # Startup pe bhi safai
-    os.system("pkill -9 ffmpeg")
-    
-    await user_bot.start()
-    await call_py.start()
-    print("✅ Ready!")
-    await idle()
-    await call_py.stop()
-    await user_bot.stop()
+    await client.start()
+    await vc.start()
+    print("Userbot is running...")
+    await client.run_until_disconnected()
 
 if __name__ == "__main__":
-    threading.Thread(target=run_flask).start()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
