@@ -3,9 +3,9 @@ import threading
 import asyncio
 import shutil
 from flask import Flask
+import pyrogram.errors
 
 # --- THE PATCH (Error Fix) ---
-import pyrogram.errors
 class FakeError(Exception):
     pass
 pyrogram.errors.GroupCallForbidden = FakeError
@@ -24,10 +24,11 @@ ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").s
 SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
 
 app = Flask(__name__)
+active_files = {}
 
 @app.route('/')
 def home():
-    return "Poster Bot is Ultra Stable Now!"
+    return "Bot is Live and Connection Error Fixed!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -37,87 +38,58 @@ def run_flask():
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
-# Temporary storage for file paths to clean up later
-active_files = {}
+# --- COMMANDS ---
 
-# 1. Security Check
-@user_bot.on_message(filters.group)
-async def security_check(client, message):
-    if message.chat.id not in ALLOWED_GROUPS:
-        try:
-            await message.reply("❌ Unauthorized Group. Leaving...")
-            await client.leave_chat(message.chat.id)
-        except:
-            pass
-        return
-    message.continue_propagation()
-
-# 2. /go Command (Ultra Clean)
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
-    if message.from_user.id not in SUDO_USERS:
+    if message.from_user.id not in SUDO_USERS or message.chat.id not in ALLOWED_GROUPS:
         return
-
     if not message.reply_to_message or not message.reply_to_message.photo:
         await message.reply("❗ Photo pe reply karke /go likho.")
         return
 
     chat_id = message.chat.id
-    status = await message.reply("🛡️ **Starting Fresh Stream...**")
-
+    status = await message.reply("🛡️ **Starting...**")
     try:
-        # Purana session agar koi ho toh clear karo
-        try:
-            await call_py.leave_call(chat_id)
-        except:
-            pass
-
-        # Photo download karo unique name ke sath
+        try: await call_py.leave_call(chat_id)
+        except: pass
+        
         file_path = await message.reply_to_message.download(file_name=f"stream_{chat_id}.jpg")
         active_files[chat_id] = file_path
-
-        # Stream start (High Quality Settings)
-        await call_py.play(
-            chat_id, 
-            MediaStream(
-                file_path,
-                video_flags=MediaStream.Flags.IGNORE_AUDIO
-            )
-        )
-        
-        await status.edit("✅ **Poster Attached Successfully.**")
-        
+        await call_py.play(chat_id, MediaStream(file_path, video_flags=MediaStream.Flags.IGNORE_AUDIO))
+        await status.edit("✅ **Poster Attached.**")
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
 
-# 3. /leave Command (Full Reset)
 @user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
-    if message.from_user.id not in SUDO_USERS:
-        return
-
+    if message.from_user.id not in SUDO_USERS: return
     chat_id = message.chat.id
     try:
-        # VC Leave karo
         await call_py.leave_call(chat_id)
-        
-        # Memory/File Clean karo
-        if chat_id in active_files:
-            file_to_del = active_files[chat_id]
-            if os.path.exists(file_to_del):
-                os.remove(file_to_del)
-            del active_files[chat_id]
-
-        await message.reply("👋 **Session Cleared & Poster Removed.**")
+        if chat_id in active_files and os.path.exists(active_files[chat_id]):
+            os.remove(active_files[chat_id])
+        await message.reply("👋 **Session Cleared.**")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-if __name__ == "__main__":
-    # Downloader folder clean up on start
+# --- FIXED EXECUTION ---
+async def main():
+    # Pehle cleanup
     if os.path.exists("downloads"):
         shutil.rmtree("downloads")
     
-    threading.Thread(target=run_flask).start()
-    print("Bot Starting...")
-    call_py.start()
-    user_bot.run()
+    # Flask start
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Bot start safely
+    print("Starting Client...")
+    await user_bot.start()
+    print("Starting PyTgCalls...")
+    await call_py.start()
+    print("Bot is fully online!")
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
