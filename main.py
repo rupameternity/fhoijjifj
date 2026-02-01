@@ -7,35 +7,33 @@ from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 
-# --- 1. CRASH FIX PATCH (Ye zaroori hai) ---
+# --- 1. PATCH (Crash Fix) ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# -------------------------------------------
+# ----------------------------
 
 # --- 2. CONFIG ---
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION = os.environ.get("SESSION_STRING", "")
 
-ALLOWED_GROUPS = []
-SUDO_USERS = []
 try:
-    if os.environ.get("ALLOWED_GROUPS"):
-        ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS").split(",") if x.strip()]
-    if os.environ.get("SUDO_USERS"):
-        SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS").split(",") if x.strip()]
+    ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
+    SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
 except:
-    pass
+    print("⚠️ Config Error: IDs check kar lena.")
+    ALLOWED_GROUPS = []
+    SUDO_USERS = []
 
-# --- 3. FLASK (Purana Wala Simple Server) ---
+# --- 3. FLASK SERVER ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot Running"
+def home(): return "Bot is Alive!"
 def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False)
 
 # --- 4. BOT SETUP ---
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
@@ -43,97 +41,82 @@ call_py = PyTgCalls(user_bot)
 
 # --- 5. LOGIC ---
 
+# Auto-Leave Unauthorized Groups
+@user_bot.on_message(filters.group)
+async def security_check(client, message):
+    if message.chat.id not in ALLOWED_GROUPS:
+        return # Ignore (Leave mat karwana abhi debug ke liye)
+    message.continue_propagation()
+
+# --- RESET COMMAND ---
+@user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
+async def restart_bot(client, message):
+    if message.from_user.id not in SUDO_USERS: return
+    
+    await message.reply("🔄 **Resetting Connection...**")
+    os.execl(sys.executable, sys.executable, *sys.argv)
+
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
     if message.from_user.id not in SUDO_USERS: return
 
     if not message.reply_to_message or not message.reply_to_message.photo:
-        await message.reply("❗ Photo pe reply karo.")
+        await message.reply("❗ Photo pe reply karke /go likho.")
         return
 
-    status = await message.reply("⚡ **Processing...**")
+    status = await message.reply("⚡ **Refreshing & Joining...**")
     chat_id = message.chat.id
-    video_file = f"video_{chat_id}.mp4"
 
     try:
-        # Purana session safai (Zaroori hai taaki bug na aaye)
+        # --- YE HAI MAIN FIX (Force Clear Previous Session) ---
         try:
+            # Pehle purana connection todo, chahe wo zinda ho ya mara hua
             await call_py.leave_call(chat_id)
+            # 2 Second ruko taaki Telegram server update ho jaye
+            await asyncio.sleep(2)
         except:
             pass
-
-        if os.path.exists(video_file):
-            os.remove(video_file)
+        # ----------------------------------------------------
 
         # 1. Download
         file_path = await message.reply_to_message.download()
 
-        # 2. CONVERT (Ye hai main fix)
-        # -r 1: Sirf 1 Frame/sec (Bohot fast banega)
-        # -preset ultrafast: CPU use nahi karega
-        # scale=854:480: Quality thodi kam ki hai taaki Render na atke
-        
-        process = await asyncio.create_subprocess_shell(
-            f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{file_path}" '
-            f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
-            f'-vf "scale=854:480" -r 1 -t 600 -y "{video_file}"',
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        # Timeout error hata diya hai, bas hone ka wait karega
-        await process.communicate()
-
-        # 3. Stream
+        # 2. Join & Stream
         await call_py.play(
             chat_id, 
-            MediaStream(video_file)
+            MediaStream(file_path)
         )
         
-        # Audio Mute
+        # 3. Mute
         try:
             await call_py.mute_stream(chat_id)
         except:
             pass
 
-        await status.edit("✅ **Streaming!**")
+        await status.edit("✅ **Poster Streaming!**")
         
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        # Cleanup (Optional: Agar file delete karni hai to uncomment kar dena)
+        # if os.path.exists(file_path):
+        #     os.remove(file_path)
 
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
-        # Error aaye to file delete kar do taaki space free rahe
-        if os.path.exists(video_file):
-            os.remove(video_file)
 
 @user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
     if message.from_user.id not in SUDO_USERS: return
     try:
         await call_py.leave_call(message.chat.id)
-        await message.reply("👋 **Left.**")
-        
-        # File delete
-        video_file = f"video_{message.chat.id}.mp4"
-        if os.path.exists(video_file):
-            os.remove(video_file)
-            
+        await message.reply("👋 **Poster Out.**")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-@user_bot.on_message(filters.command(["reset"], prefixes=["/", "!"]) & filters.group)
-async def reset_bot(client, message):
-    if message.from_user.id not in SUDO_USERS: return
-    await message.reply("🔄 **Restarting...**")
-    os.execl(sys.executable, sys.executable, *sys.argv)
-
-# --- 6. START ---
+# --- 6. STARTUP FIX ---
 async def main():
-    print("Bot Starting...")
+    print("🚀 Bot Starting...")
     await user_bot.start()
     await call_py.start()
-    print("Ready!")
+    print("✅ Bot Ready! /go use karo.")
     await idle()
     await call_py.stop()
     await user_bot.stop()
