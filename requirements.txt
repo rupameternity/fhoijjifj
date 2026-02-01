@@ -1,3 +1,7 @@
+pip==23.2.1
+setuptools==68.2.2
+wheel==0.41.3
+
 telethon==1.29.3
 pytgcalls==3.0.0.dev24
 tgcrypto==1.2.5
