@@ -142,3 +142,12 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+
+def dummy_server():
+    server = HTTPServer(("0.0.0.0", 10000), BaseHTTPRequestHandler)
+    server.serve_forever()
+
+threading.Thread(target=dummy_server, daemon=True).start()
