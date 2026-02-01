@@ -1,113 +1,144 @@
 import os
-import threading
+import sys
 import asyncio
-from flask import Flask
+from aiohttp import web
 
-# --- THE PATCH (Jo error fix karega) ---
-# Ye code sabse upar hona zaroori hai
+# --- PATCH (Crash Fix - Ye zaroori hai) ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
-
-# Dono spelling assign kar rahe hain taaki crash na ho
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# ---------------------------------------
+# ------------------------------------------
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 
-# --- CONFIGURATION (Render Env Vars se) ---
+# --- CONFIGURATION ---
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION = os.environ.get("SESSION_STRING", "")
 
-# Env vars ko list mein convert karna
-ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
-SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
-
-# --- FLASK SERVER (Render ko zinda rakhne ke liye) ---
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Poster Bot is Running with Patch!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+try:
+    ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
+    SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
+except:
+    ALLOWED_GROUPS = []
+    SUDO_USERS = []
 
 # --- BOT SETUP ---
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
-# --- LOGIC SECTIONS ---
+# --- WEB SERVER (AIOHTTP - Best for Render) ---
+async def web_server():
+    async def handle(request):
+        return web.Response(text="Bot is Running Smoothly!")
 
-# 1. Security Check (Auto Leave)
-@user_bot.on_message(filters.group)
-async def security_check(client, message):
-    # Agar allowed group nahi hai, toh check karo
-    if message.chat.id not in ALLOWED_GROUPS:
-        try:
-            # Leave message
-            await message.reply("❌ Unauthorized Group. Leaving...")
-            await client.leave_chat(message.chat.id)
-        except:
-            pass
-        return
-    message.continue_propagation()
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    try:
+        await site.start()
+        print(f"✅ Web Server started on port {port}")
+    except:
+        print("⚠️ Web Server Port Busy (Bot will still run)")
 
-# 2. /go Command
+# --- HELPER: Fast Video Converter (Stuck Fix) ---
+async def convert_to_video_fast(input_path, output_path):
+    # Ye setting image ko instantly video bana deti hai
+    cmd = (
+        f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{input_path}" '
+        f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
+        f'-vf "scale=1280:-2" -r 1 -t 3600 -y "{output_path}"'
+    )
+    process = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    await process.communicate()
+
+# --- COMMANDS ---
+
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
-    if message.from_user.id not in SUDO_USERS:
+    if message.from_user.id not in SUDO_USERS: return
+    if message.chat.id not in ALLOWED_GROUPS:
+        await message.reply("❌ Group Not Allowed")
         return
 
     if not message.reply_to_message or not message.reply_to_message.photo:
-        await message.reply("❗ Photo pe reply karke /go likho.")
+        await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("🛡️ **Processing Image...**")
+    status = await message.reply("⚡ **Processing...**")
 
     try:
-        # Photo download karo
-        file_path = await message.reply_to_message.download()
+        # Purana call leave karo (Safety)
+        try:
+            await call_py.leave_call(message.chat.id)
+        except:
+            pass
 
-        # Stream start karo
+        # 1. Download
+        file_path = await message.reply_to_message.download()
+        video_file = f"video_{message.chat.id}.mp4"
+
+        # 2. Convert (Ye step stuck hone se bachayega)
+        await convert_to_video_fast(file_path, video_file)
+
+        # 3. Stream
         await call_py.play(
             message.chat.id, 
-            MediaStream(
-                file_path,
-                video_flags=MediaStream.Flags.IGNORE_AUDIO # Sirf video/image dikhana hai
-            )
+            MediaStream(video_file) 
         )
         
-        await status.edit("✅ **Poster Attached.**")
+        # Audio Mute
+        try:
+            await call_py.mute_stream(message.chat.id)
+        except:
+            pass
+            
+        await status.edit("✅ **Streaming Started!**")
         
-        # Optional: File delete mat karna abhi, stream ke liye chahiye hoti hai
-        
+        # Cleanup
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
 
-# 3. /leave Command
 @user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
-    if message.from_user.id not in SUDO_USERS:
-        return
-
+    if message.from_user.id not in SUDO_USERS: return
     try:
         await call_py.leave_call(message.chat.id)
         await message.reply("👋 **Poster Out.**")
+        
+        # Video file delete
+        video_file = f"video_{message.chat.id}.mp4"
+        if os.path.exists(video_file):
+            os.remove(video_file)
+            
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-# --- EXECUTION ---
+# --- MAIN EXECUTION ---
+async def main():
+    print("🚀 Initializing...")
+    await web_server() # Web server start
+    await user_bot.start()
+    await call_py.start()
+    print("✅ Bot is Online")
+    await idle()
+    await call_py.stop()
+    await user_bot.stop()
+
 if __name__ == "__main__":
-    # Flask ko alag thread mein chalayenge
-    threading.Thread(target=run_flask).start()
-    
-    # Bot ko start karenge
-    print("Bot Starting...")
-    call_py.start()
-    user_bot.run()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
