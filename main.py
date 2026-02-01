@@ -7,15 +7,15 @@ from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 
-# --- CRASH FIX PATCH ---
+# --- 1. CRASH FIX PATCH (Ye zaroori hai) ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# -----------------------
+# -------------------------------------------
 
-# --- CONFIG ---
+# --- 2. CONFIG ---
 API_ID = int(os.environ.get("API_ID", "0"))
 API_HASH = os.environ.get("API_HASH", "")
 SESSION = os.environ.get("SESSION_STRING", "")
@@ -30,47 +30,18 @@ try:
 except:
     pass
 
-# --- FLASK ---
+# --- 3. FLASK (Purana Wala Simple Server) ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot is Online"
+def home(): return "Bot Running"
 def run_flask():
-    # use_reloader=False zaroori hai
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-# --- BOT ---
+# --- 4. BOT SETUP ---
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
-# --- CONVERTER (1 FPS - No Stuck) ---
-async def convert_to_video_fast(input_path, output_path):
-    cmd = (
-        f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{input_path}" '
-        f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
-        f'-vf "scale=1280:-2" -r 1 -t 600 -y "{output_path}"'
-    )
-    process = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    # 20 second ka timeout taaki atke nahi
-    try:
-        await asyncio.wait_for(process.communicate(), timeout=20.0)
-    except asyncio.TimeoutError:
-        try:
-            process.kill()
-        except:
-            pass
-        raise Exception("Processing Timeout (Try again)")
-
-# --- LOGIC ---
-
-@user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
-async def restart_bot(client, message):
-    if message.from_user.id not in SUDO_USERS: return
-    await message.reply("🔄 **Rebooting System...**")
-    os.execl(sys.executable, sys.executable, *sys.argv)
+# --- 5. LOGIC ---
 
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
@@ -80,27 +51,38 @@ async def start_stream(client, message):
         await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("⚡ **Refreshing...**")
+    status = await message.reply("⚡ **Processing...**")
     chat_id = message.chat.id
     video_file = f"video_{chat_id}.mp4"
 
     try:
-        # --- FIX FOR BUGS: Pehle purana session clear karo ---
+        # Purana session safai (Zaroori hai taaki bug na aaye)
         try:
             await call_py.leave_call(chat_id)
-            await asyncio.sleep(1) # Telegram ko saans lene do
         except:
             pass
-        
-        # Purani files udao
+
         if os.path.exists(video_file):
             os.remove(video_file)
 
         # 1. Download
         file_path = await message.reply_to_message.download()
 
-        # 2. Convert (Fast Mode)
-        await convert_to_video_fast(file_path, video_file)
+        # 2. CONVERT (Ye hai main fix)
+        # -r 1: Sirf 1 Frame/sec (Bohot fast banega)
+        # -preset ultrafast: CPU use nahi karega
+        # scale=854:480: Quality thodi kam ki hai taaki Render na atke
+        
+        process = await asyncio.create_subprocess_shell(
+            f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{file_path}" '
+            f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
+            f'-vf "scale=854:480" -r 1 -t 600 -y "{video_file}"',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        # Timeout error hata diya hai, bas hone ka wait karega
+        await process.communicate()
 
         # 3. Stream
         await call_py.play(
@@ -108,20 +90,20 @@ async def start_stream(client, message):
             MediaStream(video_file)
         )
         
+        # Audio Mute
         try:
             await call_py.mute_stream(chat_id)
         except:
             pass
 
-        await status.edit("✅ **Live!**")
+        await status.edit("✅ **Streaming!**")
         
-        # Image delete (Video rakhna padega)
         if os.path.exists(file_path):
             os.remove(file_path)
 
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
-        # Error aane pe bhi safai karo
+        # Error aaye to file delete kar do taaki space free rahe
         if os.path.exists(video_file):
             os.remove(video_file)
 
@@ -132,6 +114,7 @@ async def stop_stream(client, message):
         await call_py.leave_call(message.chat.id)
         await message.reply("👋 **Left.**")
         
+        # File delete
         video_file = f"video_{message.chat.id}.mp4"
         if os.path.exists(video_file):
             os.remove(video_file)
@@ -139,12 +122,18 @@ async def stop_stream(client, message):
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-# --- STARTUP ---
+@user_bot.on_message(filters.command(["reset"], prefixes=["/", "!"]) & filters.group)
+async def reset_bot(client, message):
+    if message.from_user.id not in SUDO_USERS: return
+    await message.reply("🔄 **Restarting...**")
+    os.execl(sys.executable, sys.executable, *sys.argv)
+
+# --- 6. START ---
 async def main():
-    print("🚀 Bot Starting...")
+    print("Bot Starting...")
     await user_bot.start()
     await call_py.start()
-    print("✅ Ready!")
+    print("Ready!")
     await idle()
     await call_py.stop()
     await user_bot.stop()
