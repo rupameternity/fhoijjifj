@@ -1,153 +1,118 @@
 import os
 import asyncio
-import tempfile
-import shutil
-import subprocess
-
-from telethon import TelegramClient, events
+from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
-from pytgcalls.types.input_stream import InputStream
-from pytgcalls.types.input_stream.quality import HighQualityVideo
-from PIL import Image
+from pytgcalls.types import MediaStream
 
-# ================== ENV ==================
+# --- Configuration from Render Environment Variables ---
+API_ID = int(os.environ.get("API_ID"))
+API_HASH = os.environ.get("API_HASH")
+SESSION_STRING = os.environ.get("SESSION_STRING")
 
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")
+# Admin aur Groups ko comma se split karke list banayenge
+ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()]
+ALLOWED_GROUPS = [int(x) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
 
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS").split(",")))
-ALLOWED_GROUPS = list(map(int, os.getenv("ALLOWED_GROUPS").split(",")))
-
-# ================= CLIENT =================
-
-client = TelegramClient(
-    session=SESSION_STRING,
+# --- Client Setup ---
+app = Client(
+    "render_userbot",
     api_id=API_ID,
-    api_hash=API_HASH
+    api_hash=API_HASH,
+    session_string=SESSION_STRING
 )
+call_py = PyTgCalls(app)
 
-vc = PyTgCalls(client)
+# --- Helper Function to Clean Cache ---
+def clean_cache():
+    if os.path.exists("input.jpg"):
+        os.remove("input.jpg")
+    if os.path.exists("stream.mp4"):
+        os.remove("stream.mp4")
 
-STREAM_PROCESS = None
-TEMP_DIR = None
-
-# ================= CLEANUP =================
-
-def clean_all():
-    global STREAM_PROCESS, TEMP_DIR
-
-    if STREAM_PROCESS:
-        try:
-            STREAM_PROCESS.kill()
-        except:
-            pass
-        STREAM_PROCESS = None
-
-    if TEMP_DIR and os.path.exists(TEMP_DIR):
-        shutil.rmtree(TEMP_DIR)
-
-    TEMP_DIR = None
-
-# ================= /GO =================
-
-@client.on(events.NewMessage(pattern=r"^/go$"))
-async def start_stream(event):
-    global STREAM_PROCESS, TEMP_DIR
-
-    if event.sender_id not in ADMIN_IDS:
+# --- /go Command Handler ---
+@app.on_message(filters.command("go") & filters.group)
+async def start_stream(client, message):
+    # Security Check: Only Admin & Allowed Groups
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    if message.chat.id not in ALLOWED_GROUPS:
         return
 
-    if event.chat_id not in ALLOWED_GROUPS:
+    # Check if replied to a photo
+    if not message.reply_to_message or not message.reply_to_message.photo:
+        await message.reply_text("❌ Bhai kisi photo pe reply karke /go likh.")
         return
 
-    if not event.is_group:
-        return
+    status_msg = await message.reply_text("🔄 Processing... Photo download kar raha hun.")
 
-    if not event.reply_to_msg_id:
-        await event.reply("❌ Reply to an image.")
-        return
+    # Purana kachra saaf karo
+    clean_cache()
 
-    reply = await event.get_reply_message()
+    try:
+        # 1. Download Photo
+        await message.reply_to_message.download("input.jpg")
+        await status_msg.edit("🎬 Video generate kar raha hun (FFMPEG)...")
 
-    if not reply.photo:
-        await event.reply("❌ Only image supported.")
-        return
-
-    clean_all()
-
-    TEMP_DIR = tempfile.mkdtemp()
-    img_path = os.path.join(TEMP_DIR, "image.jpg")
-
-    await reply.download_media(img_path)
-
-    Image.open(img_path).convert("RGB").save(img_path)
-
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-re",
-        "-loop", "1",
-        "-i", img_path,
-        "-f", "lavfi",
-        "-i", "anullsrc",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-shortest",
-        "-"
-    ]
-
-    STREAM_PROCESS = subprocess.Popen(
-        ffmpeg_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL
-    )
-
-    await vc.join_group_call(
-        event.chat_id,
-        InputStream(
-            STREAM_PROCESS.stdout,
-            HighQualityVideo()
+        # 2. Convert Image to Video using FFMPEG (Lightweight Loop)
+        # -loop 1: Image loop karega
+        # -t 3600: 1 ghante ki stream banayega (file size control ke liye)
+        # -pix_fmt yuv420p: Telegram support ke liye zaroori hai
+        # -r 10: Sirf 10 FPS (Static image hai, high FPS ki zaroorat nahi, RAM bachega)
+        ffmpeg_cmd = (
+            "ffmpeg -loop 1 -i input.jpg -f lavfi -i anullsrc "
+            "-c:v libx264 -tune stillimage -c:a aac -b:a 12k "
+            "-pix_fmt yuv420p -r 10 -shortest -t 3600 stream.mp4 -y"
         )
-    )
+        
+        process = await asyncio.create_subprocess_shell(ffmpeg_cmd)
+        await process.communicate()
 
-    await event.reply("🟢 Image streaming started (unlimited).")
+        # 3. Join VC and Stream
+        if not os.path.exists("stream.mp4"):
+            await status_msg.edit("❌ Error: Video file create nahi hui.")
+            return
 
-# ================= /LEAVE =================
+        await status_msg.edit("▶️ Streaming starting on VC...")
+        
+        await call_py.play(
+            message.chat.id,
+            MediaStream(
+                "stream.mp4",
+            )
+        )
+        await status_msg.edit("✅ **Streaming Started!**")
 
-@client.on(events.NewMessage(pattern=r"^/leave$"))
-async def stop_stream(event):
-    if event.sender_id not in ADMIN_IDS:
+    except Exception as e:
+        await status_msg.edit(f"❌ Error: {e}")
+        clean_cache()
+
+# --- /leave Command Handler ---
+@app.on_message(filters.command("leave") & filters.group)
+async def stop_stream(client, message):
+    # Security Check
+    if message.from_user.id not in ADMIN_IDS:
         return
-
-    if event.chat_id not in ALLOWED_GROUPS:
+    if message.chat.id not in ALLOWED_GROUPS:
         return
 
     try:
-        await vc.leave_group_call(event.chat_id)
-    except:
-        pass
+        await call_py.leave_call(message.chat.id)
+        await message.reply_text("👋 Left VC.")
+    except Exception as e:
+        await message.reply_text(f"⚠️ VC mein nahi tha shayad: {e}")
 
-    clean_all()
-    await event.reply("🔴 VC left & memory cleaned.")
+    # RAM/Disk Cleanup: Delete files immediately
+    clean_cache()
+    await message.reply_text("🗑️ Cache cleared. RAM free kar diya.")
 
-# ================= START =================
-
-async def main():
-    await client.start()
-    await vc.start()
-    print("Userbot is running...")
-    await client.run_until_disconnected()
+# --- Start Bot ---
+async def start_bot():
+    print("Userbot Starting...")
+    await app.start()
+    await call_py.start()
+    print("Userbot is Active!")
+    # Keep running
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import threading
-
-def dummy_server():
-    server = HTTPServer(("0.0.0.0", 10000), BaseHTTPRequestHandler)
-    server.serve_forever()
-
-threading.Thread(target=dummy_server, daemon=True).start()
+    asyncio.run(start_bot())
