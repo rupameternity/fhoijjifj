@@ -56,7 +56,14 @@ async def start_stream(client, message):
         
         file_path = await message.reply_to_message.download(file_name=f"stream_{chat_id}.jpg")
         active_files[chat_id] = file_path
-        await call_py.play(chat_id, MediaStream(file_path, video_flags=MediaStream.Flags.IGNORE_AUDIO))
+        # Stream start karo (Updated)
+        await call_py.play(
+            message.chat.id, 
+            MediaStream(
+                file_path,
+                video_flags=1 # <-- Sirf '1' likh do, ye IGNORE_AUDIO ka kaam karega
+            )
+        )
         await status.edit("✅ **Poster Attached.**")
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
@@ -93,3 +100,4 @@ async def main():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
+
