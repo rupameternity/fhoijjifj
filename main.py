@@ -8,13 +8,13 @@ from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 
-# --- 1. PATCH (Crash Fix) ---
+# --- 1. CRASH FIX PATCH ---
 import pyrogram.errors
 class FakeError(Exception):
     pass
 pyrogram.errors.GroupCallForbidden = FakeError
 pyrogram.errors.GroupcallForbidden = FakeError
-# ----------------------------
+# --------------------------
 
 # --- 2. CONFIG ---
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -34,7 +34,7 @@ except:
 # --- 3. FLASK SERVER ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot is Running (Pipe Mode)"
+def home(): return "Bot is Ready"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False)
 
@@ -42,16 +42,60 @@ def run_flask():
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
-# Global Dictionary to manage FFmpeg processes
-ffmpeg_processes = {}
+# --- 5. SYSTEM CLEANER (Ye hai Jadu) ---
+# Ye function har baar purana kachra saaf karega
+async def nuclear_cleanup(chat_id):
+    print(f"⚠️ Performing Nuclear Cleanup for {chat_id}...")
+    
+    # 1. Force Kill FFmpeg (System level pe process maarega)
+    try:
+        os.system("pkill -9 ffmpeg")
+    except:
+        pass
 
-# --- 5. LOGIC ---
+    # 2. Leave Call forcefully
+    try:
+        await call_py.leave_call(chat_id)
+        await asyncio.sleep(1.5) # Thoda time do Telegram ko update hone ke liye
+    except:
+        pass
+    
+    # 3. Delete ALL .mp4 files in directory (Disk space clear)
+    try:
+        for file in os.listdir():
+            if file.endswith(".mp4"):
+                os.remove(file)
+    except:
+        pass
 
-@user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
-async def restart_bot(client, message):
-    if message.from_user.id not in SUDO_USERS: return
-    await message.reply("🔄 **Rebooting...**")
-    os.execl(sys.executable, sys.executable, *sys.argv)
+# --- 6. FAST CONVERTER (360p = No Lag) ---
+async def convert_to_video_fast(input_path, output_path):
+    # scale=640:-2 (360p) taaki Render Free Tier pe load na aaye
+    # -t 3600 (1 Ghanta chalega)
+    cmd = (
+        f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{input_path}" '
+        f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
+        f'-vf "scale=640:-2" -r 1 -t 3600 -y "{output_path}"'
+    )
+    
+    process = await asyncio.create_subprocess_shell(
+        cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    # Timeout increased to 90s just in case, but usually takes 3s
+    try:
+        await asyncio.wait_for(process.communicate(), timeout=90.0)
+    except asyncio.TimeoutError:
+        try:
+            process.kill()
+        except:
+            pass
+        # Agar timeout ho jaye, to script restart kar do (Last Resort)
+        os.execl(sys.executable, sys.executable, *sys.argv)
+
+# --- 7. LOGIC ---
 
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
 async def start_stream(client, message):
@@ -61,64 +105,25 @@ async def start_stream(client, message):
         await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("⚡ **Starting Live Stream...**")
+    # User ko batao hum safai kar rahe hain
+    status = await message.reply("🧹 **Cleaning & Restarting Stream...**")
     chat_id = message.chat.id
-    pipe_path = f"pipe_{chat_id}"
-
+    
     try:
-        # --- CLEANUP OLD PROCESSES ---
-        # Agar pehle se kuch chal raha hai to usko kill karo
-        if chat_id in ffmpeg_processes:
-            try:
-                os.killpg(os.getpgid(ffmpeg_processes[chat_id].pid), signal.SIGTERM)
-            except:
-                pass
-            del ffmpeg_processes[chat_id]
-        
-        # Purana call leave karo (Force Reset)
-        try:
-            await call_py.leave_call(chat_id)
-            await asyncio.sleep(1)
-        except:
-            pass
+        # --- STEP 1: SAB KUCH DELETE/KILL KARO ---
+        await nuclear_cleanup(chat_id)
 
-        # Purana Pipe delete karo
-        if os.path.exists(pipe_path):
-            os.remove(pipe_path)
-            
-        # Naya Pipe banao (Linux Magic)
-        os.mkfifo(pipe_path)
-
-        # 1. Download Photo
+        # --- STEP 2: FRESH START ---
         file_path = await message.reply_to_message.download()
+        video_file = f"video_{chat_id}.mp4"
 
-        # 2. Start FFmpeg in BACKGROUND (Non-Blocking)
-        # -re: Real-time speed (Atkega nahi)
-        # -loop 1: Infinite Loop (4 sec baad band nahi hoga)
-        # -f mpegts: Stream format (Pipe ke liye best)
-        # -r 20: Smooth FPS
-        
-        cmd = (
-            f'ffmpeg -hide_banner -loglevel error -re -loop 1 -i "{file_path}" '
-            f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
-            f'-vf "scale=854:480" -r 20 -g 60 -b:v 1000k -f mpegts "{pipe_path}"'
-        )
+        # Convert
+        await convert_to_video_fast(file_path, video_file)
 
-        # Process start karo (Await mat karna communicate ke liye)
-        process = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            preexec_fn=os.setsid # Process Group banata hai kill karne ke liye
-        )
-        
-        # Process ID save karlo taaki /leave pe band kar sakein
-        ffmpeg_processes[chat_id] = process
-
-        # 3. Stream from Pipe
+        # Stream
         await call_py.play(
             chat_id, 
-            MediaStream(pipe_path)
+            MediaStream(video_file)
         )
         
         try:
@@ -126,45 +131,32 @@ async def start_stream(client, message):
         except:
             pass
 
-        await status.edit("✅ **Live (Infinite Loop)!**")
+        await status.edit("✅ **Live (Fresh Session)!**")
         
-        # Image delete kar sakte hain ab
+        # Image delete
         if os.path.exists(file_path):
             os.remove(file_path)
 
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
-        # Error aane pe pipe uda do
-        if os.path.exists(pipe_path):
-            os.remove(pipe_path)
+        # Error aane pe bhi safai
+        await nuclear_cleanup(chat_id)
 
-@user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
+@user_bot.on_message(filters.command(["leave", "stop"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
     if message.from_user.id not in SUDO_USERS: return
-    chat_id = message.chat.id
     try:
-        await call_py.leave_call(chat_id)
-        await message.reply("👋 **Left.**")
-        
-        # --- IMPORTANT: KILL FFMPEG ---
-        if chat_id in ffmpeg_processes:
-            try:
-                os.killpg(os.getpgid(ffmpeg_processes[chat_id].pid), signal.SIGTERM)
-            except:
-                pass
-            del ffmpeg_processes[chat_id]
-            
-        # Pipe delete
-        pipe_path = f"pipe_{chat_id}"
-        if os.path.exists(pipe_path):
-            os.remove(pipe_path)
-            
+        await nuclear_cleanup(message.chat.id)
+        await message.reply("👋 **Session Cleared.**")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-# --- STARTUP ---
+# --- 8. STARTUP ---
 async def main():
     print("🚀 Bot Starting...")
+    # Startup pe bhi safai
+    os.system("pkill -9 ffmpeg")
+    
     await user_bot.start()
     await call_py.start()
     print("✅ Ready!")
