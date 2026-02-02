@@ -31,7 +31,7 @@ except:
 # --- 3. FLASK SERVER ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot is Alive (Audio Fixed)"
+def home(): return "Bot is Alive (Lite Mode)"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False)
 
@@ -44,7 +44,7 @@ call_py = PyTgCalls(user_bot)
 @user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
 async def restart_bot(client, message):
     if message.from_user.id not in SUDO_USERS: return
-    await message.reply("🔄 **Rebooting...**")
+    await message.reply("🔄 **Cleaning RAM...**")
     gc.collect()
     os.execl(sys.executable, sys.executable, *sys.argv)
 
@@ -56,14 +56,15 @@ async def start_stream(client, message):
         await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("⚡ **Fixing Audio & Streaming...**")
+    status = await message.reply("⚡ **Quick Setup (Lite Mode)...**")
     chat_id = message.chat.id
 
     try:
-        # STEP 1: SAFETY CLEANUP
+        # STEP 1: RESET CONNECTION
+        # Purana connection todna zaroori hai taaki stuck na ho
         try:
             await call_py.leave_call(chat_id)
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(1)
         except:
             pass
         gc.collect()
@@ -72,20 +73,19 @@ async def start_stream(client, message):
         original_path = await message.reply_to_message.download()
         video_file = f"stream_{chat_id}.mp4"
 
-        # --- STEP 3: AUDIO FIX + RAM SAVER ---
-        # -f lavfi -i anullsrc: Ye "Fake Silence" create karta hai.
-        # -map 0:v -map 1:a: Video aur Audio ko jodta hai.
-        # -c:a aac: Audio format set karta hai.
-        # -t 1800: 30 Minute ki video.
-        # -r 1: 1 FPS (RAM bachane ke liye).
+        # --- STEP 3: THE JUGAD (360p + 1 FPS) ---
+        # -t 1800: Duration 30 Minutes (Lambi chalegi).
+        # scale=640:-2: 360p Quality (Render ki RAM nahi bharegi).
+        # -r 1: 1 FPS (Processing time = 2 seconds).
+        # anullsrc: Fake Audio (Audio Tool Error nahi aayega).
         
         cmd = (
             f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{original_path}" '
             f'-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
             f'-map 0:v -map 1:a '
             f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
-            f'-c:a aac -b:a 128k '
-            f'-vf "scale=1280:-2" -r 1 -t 1800 -y "{video_file}"'
+            f'-c:a aac -b:a 32k '
+            f'-vf "scale=640:-2" -r 1 -t 1800 -y "{video_file}"'
         )
 
         process = await asyncio.create_subprocess_shell(
@@ -94,7 +94,7 @@ async def start_stream(client, message):
             stderr=asyncio.subprocess.PIPE
         )
         
-        # 30-40 sec wait (30 min file ke liye)
+        # 30 min ki file 360p pe turant ban jayegi
         try:
             await asyncio.wait_for(process.communicate(), timeout=40.0)
         except asyncio.TimeoutError:
@@ -104,13 +104,12 @@ async def start_stream(client, message):
             os.remove(original_path)
 
         # STEP 4: STREAM
-        # Ab flags ki zaroorat nahi hai, file perfect hai
         await call_py.play(
             chat_id, 
             MediaStream(video_file)
         )
         
-        await status.edit("✅ **Live! (Audio Bug Fixed)**")
+        await status.edit("✅ **Poster Live!** (30 Mins)")
         gc.collect()
 
     except Exception as e:
