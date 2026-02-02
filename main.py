@@ -45,16 +45,15 @@ call_py = PyTgCalls(user_bot)
 @user_bot.on_message(filters.group)
 async def security_check(client, message):
     if message.chat.id not in ALLOWED_GROUPS:
-        return # Ignore (Leave mat karwana abhi debug ke liye)
+        return 
     message.continue_propagation()
 
-# --- NEW: RESET COMMAND (Ram Baan Ilaaj) ---
+# --- RESET COMMAND ---
 @user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
 async def restart_bot(client, message):
     if message.from_user.id not in SUDO_USERS: return
     
     await message.reply("🔄 **Restarting System...**")
-    # Ye command bot ko band karke firse chalu karegi
     os.execl(sys.executable, sys.executable, *sys.argv)
 
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
@@ -65,25 +64,40 @@ async def start_stream(client, message):
         await message.reply("❗ Photo pe reply karke /go likho.")
         return
 
-    status = await message.reply("⚡ **Processing...**")
+    status = await message.reply("⚡ **Refreshing & Connecting...**")
+    chat_id = message.chat.id
 
     try:
+        # --- FIX ADDED HERE (Connection Reset) ---
+        # Ye naya code hai: Join karne se pehle purana connection tod do.
+        # Isse "Processing" wala stuck issue solve ho jayega.
+        try:
+            await call_py.leave_call(chat_id)
+            await asyncio.sleep(2) # 2 second ruko taaki Telegram server update ho jaye
+        except:
+            pass
+        # -----------------------------------------
+
         # 1. Download
         file_path = await message.reply_to_message.download()
 
-        # 2. Join & Stream (Bina Ignore Audio flag ke)
+        # 2. Join & Stream
         await call_py.play(
-            message.chat.id, 
+            chat_id, 
             MediaStream(file_path)
         )
         
-        # 3. Mute (Taki shor na aaye)
+        # 3. Mute
         try:
-            await call_py.mute_stream(message.chat.id)
+            await call_py.mute_stream(chat_id)
         except:
             pass
 
         await status.edit("✅ **Poster Streaming!**")
+        
+        # Cleanup (Optional: Agar disk full hone ka dar ho to ise uncomment kar dena)
+        # if os.path.exists(file_path):
+        #     os.remove(file_path)
 
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
@@ -97,7 +111,7 @@ async def stop_stream(client, message):
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-# --- 6. STARTUP FIX (Ye zaroori hai) ---
+# --- 6. STARTUP ---
 async def main():
     print("🚀 Bot Starting...")
     await user_bot.start()
@@ -108,9 +122,6 @@ async def main():
     await user_bot.stop()
 
 if __name__ == "__main__":
-    # Flask alag thread mein
     threading.Thread(target=run_flask).start()
-    
-    # Main Bot Loop
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
