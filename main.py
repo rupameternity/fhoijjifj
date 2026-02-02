@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import asyncio
+import gc  # Garbage Collector (RAM Safai ke liye)
 from flask import Flask
 from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
@@ -24,14 +25,13 @@ try:
     ALLOWED_GROUPS = [int(x.strip()) for x in os.environ.get("ALLOWED_GROUPS", "").split(",") if x.strip()]
     SUDO_USERS = [int(x.strip()) for x in os.environ.get("SUDO_USERS", "").split(",") if x.strip()]
 except:
-    print("⚠️ Config Error: IDs check kar lena.")
     ALLOWED_GROUPS = []
     SUDO_USERS = []
 
 # --- 3. FLASK SERVER ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot is Alive!"
+def home(): return "Bot is Alive (Low RAM Mode)"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False)
 
@@ -41,19 +41,10 @@ call_py = PyTgCalls(user_bot)
 
 # --- 5. LOGIC ---
 
-# Auto-Leave Unauthorized Groups
-@user_bot.on_message(filters.group)
-async def security_check(client, message):
-    if message.chat.id not in ALLOWED_GROUPS:
-        return 
-    message.continue_propagation()
-
-# --- RESET COMMAND ---
 @user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
 async def restart_bot(client, message):
     if message.from_user.id not in SUDO_USERS: return
-    
-    await message.reply("🔄 **Restarting System...**")
+    await message.reply("🔄 **Rebooting & Clearing RAM...**")
     os.execl(sys.executable, sys.executable, *sys.argv)
 
 @user_bot.on_message(filters.command(["go"], prefixes=["/", "!"]) & filters.group)
@@ -61,43 +52,55 @@ async def start_stream(client, message):
     if message.from_user.id not in SUDO_USERS: return
 
     if not message.reply_to_message or not message.reply_to_message.photo:
-        await message.reply("❗ Photo pe reply karke /go likho.")
+        await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("⚡ **Refreshing & Connecting...**")
+    status = await message.reply("⚡ **Optimizing & Joining...**")
     chat_id = message.chat.id
 
     try:
-        # --- FIX ADDED HERE (Connection Reset) ---
-        # Ye naya code hai: Join karne se pehle purana connection tod do.
-        # Isse "Processing" wala stuck issue solve ho jayega.
+        # STEP 1: FORCE RESET (Processing Stuck Fix)
         try:
             await call_py.leave_call(chat_id)
-            await asyncio.sleep(2) # 2 second ruko taaki Telegram server update ho jaye
+            await asyncio.sleep(1.5)
         except:
             pass
-        # -----------------------------------------
+            
+        # STEP 2: RAM CLEANUP
+        gc.collect() # Python ki memory saaf karo
 
-        # 1. Download
-        file_path = await message.reply_to_message.download()
+        # STEP 3: DOWNLOAD
+        original_path = await message.reply_to_message.download()
+        compressed_path = f"small_{chat_id}.jpg"
 
-        # 2. Join & Stream
+        # --- STEP 4: MAGIC RESIZE (RAM Saver) ---
+        # Image ko 640px width pe resize karo (Bohot halka ho jayega)
+        # Ye command 4MB ki photo ko 50KB bana degi.
+        os.system(f'ffmpeg -hide_banner -loglevel error -i "{original_path}" -vf scale=640:-1 -q:v 20 "{compressed_path}" -y')
+        
+        # Original bhari file delete karo
+        if os.path.exists(original_path):
+            os.remove(original_path)
+
+        # STEP 5: STREAM LOW QUALITY IMAGE
         await call_py.play(
             chat_id, 
-            MediaStream(file_path)
+            MediaStream(compressed_path)
         )
         
-        # 3. Mute
         try:
             await call_py.mute_stream(chat_id)
         except:
             pass
 
-        await status.edit("✅ **Poster Streaming!**")
+        await status.edit("✅ **Stream Live!** (Low RAM)")
         
-        # Cleanup (Optional: Agar disk full hone ka dar ho to ise uncomment kar dena)
-        # if os.path.exists(file_path):
-        #     os.remove(file_path)
+        # Compressed file bhi uda do (RAM mein load ho chuki hai)
+        if os.path.exists(compressed_path):
+            os.remove(compressed_path)
+            
+        # Final RAM Sweep
+        gc.collect()
 
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
@@ -107,7 +110,8 @@ async def stop_stream(client, message):
     if message.from_user.id not in SUDO_USERS: return
     try:
         await call_py.leave_call(message.chat.id)
-        await message.reply("👋 **Poster Out.**")
+        await message.reply("👋 **Left.**")
+        gc.collect() # RAM Safai
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
@@ -116,7 +120,7 @@ async def main():
     print("🚀 Bot Starting...")
     await user_bot.start()
     await call_py.start()
-    print("✅ Bot Ready! /go use karo.")
+    print("✅ Ready!")
     await idle()
     await call_py.stop()
     await user_bot.stop()
