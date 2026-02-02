@@ -3,6 +3,7 @@ import sys
 import threading
 import asyncio
 import gc
+import time
 from flask import Flask
 from pyrogram import Client, filters, idle
 from pytgcalls import PyTgCalls
@@ -31,7 +32,7 @@ except:
 # --- 3. FLASK SERVER ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot is Alive (Lite Mode)"
+def home(): return "Bot is Alive (Auto-Loop Mode)"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), use_reloader=False)
 
@@ -39,12 +40,15 @@ def run_flask():
 user_bot = Client("poster_bot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION)
 call_py = PyTgCalls(user_bot)
 
+# Global flag to control the loop
+stream_active = {}
+
 # --- 5. LOGIC ---
 
 @user_bot.on_message(filters.command(["reset", "restart"], prefixes=["/", "!"]) & filters.group)
 async def restart_bot(client, message):
     if message.from_user.id not in SUDO_USERS: return
-    await message.reply("🔄 **Cleaning RAM...**")
+    await message.reply("🔄 **Rebooting...**")
     gc.collect()
     os.execl(sys.executable, sys.executable, *sys.argv)
 
@@ -56,12 +60,12 @@ async def start_stream(client, message):
         await message.reply("❗ Photo pe reply karo.")
         return
 
-    status = await message.reply("⚡ **Quick Setup (Lite Mode)...**")
     chat_id = message.chat.id
+    status = await message.reply("⚡ **Generating (5 Min Loop)...**")
 
     try:
-        # STEP 1: RESET CONNECTION
-        # Purana connection todna zaroori hai taaki stuck na ho
+        # STEP 1: RESET
+        stream_active[chat_id] = False # Stop old loops
         try:
             await call_py.leave_call(chat_id)
             await asyncio.sleep(1)
@@ -73,11 +77,11 @@ async def start_stream(client, message):
         original_path = await message.reply_to_message.download()
         video_file = f"stream_{chat_id}.mp4"
 
-        # --- STEP 3: THE JUGAD (360p + 1 FPS) ---
-        # -t 1800: Duration 30 Minutes (Lambi chalegi).
-        # scale=640:-2: 360p Quality (Render ki RAM nahi bharegi).
-        # -r 1: 1 FPS (Processing time = 2 seconds).
-        # anullsrc: Fake Audio (Audio Tool Error nahi aayega).
+        # --- STEP 3: CREATE 5 MINUTE VIDEO ---
+        # -t 300: 5 Minutes only (Turant ban jayega)
+        # -r 1: 1 FPS (CPU bachane ke liye)
+        # scale=640:-2: 360p (RAM bachane ke liye)
+        # anullsrc: Fake Audio (Error fix)
         
         cmd = (
             f'ffmpeg -hide_banner -loglevel error -loop 1 -i "{original_path}" '
@@ -85,7 +89,7 @@ async def start_stream(client, message):
             f'-map 0:v -map 1:a '
             f'-c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p '
             f'-c:a aac -b:a 32k '
-            f'-vf "scale=640:-2" -r 1 -t 1800 -y "{video_file}"'
+            f'-vf "scale=640:-2" -r 1 -t 300 -y "{video_file}"'
         )
 
         process = await asyncio.create_subprocess_shell(
@@ -94,38 +98,58 @@ async def start_stream(client, message):
             stderr=asyncio.subprocess.PIPE
         )
         
-        # 30 min ki file 360p pe turant ban jayegi
+        # 5 min ki video 10 sec ke andar ban jani chahiye
         try:
-            await asyncio.wait_for(process.communicate(), timeout=40.0)
+            await asyncio.wait_for(process.communicate(), timeout=30.0)
         except asyncio.TimeoutError:
             process.kill()
+            await status.edit("❌ **Timeout:** Server slow hai.")
+            return
 
         if os.path.exists(original_path):
             os.remove(original_path)
 
-        # STEP 4: STREAM
-        await call_py.play(
-            chat_id, 
-            MediaStream(video_file)
-        )
+        # Check if file is valid
+        if os.path.getsize(video_file) < 1000:
+            await status.edit("❌ **Error:** File empty bani.")
+            return
+
+        # --- STEP 4: START STREAM WITH AUTO-LOOP ---
+        stream_active[chat_id] = True
+        await status.edit("✅ **Live! (Auto-Loop On)**")
         
-        await status.edit("✅ **Poster Live!** (30 Mins)")
-        gc.collect()
+        # Ye background mein chalega
+        asyncio.create_task(run_loop(chat_id, video_file))
 
     except Exception as e:
         await status.edit(f"❌ Error: {e}")
         if os.path.exists(video_file):
             os.remove(video_file)
 
+async def run_loop(chat_id, video_file):
+    # Ye function har 5 min baad video ko firse play karega
+    while stream_active.get(chat_id):
+        try:
+            await call_py.play(chat_id, MediaStream(video_file))
+            # 5 Minute (300 sec) wait karo, fir loop hoga
+            # Hum thoda kam wait karenge taaki gap na aaye
+            await asyncio.sleep(295) 
+        except Exception as e:
+            print(f"Loop Error: {e}")
+            break
+
 @user_bot.on_message(filters.command(["leave"], prefixes=["/", "!"]) & filters.group)
 async def stop_stream(client, message):
     if message.from_user.id not in SUDO_USERS: return
+    chat_id = message.chat.id
+    stream_active[chat_id] = False # Loop stop karo
+    
     try:
-        await call_py.leave_call(message.chat.id)
+        await call_py.leave_call(chat_id)
         await message.reply("👋 **Left.**")
         
-        if os.path.exists(f"stream_{message.chat.id}.mp4"):
-            os.remove(f"stream_{message.chat.id}.mp4")
+        if os.path.exists(f"stream_{chat_id}.mp4"):
+            os.remove(f"stream_{chat_id}.mp4")
         gc.collect()
         
     except Exception as e:
